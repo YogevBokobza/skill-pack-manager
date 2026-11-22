@@ -45,18 +45,42 @@ def main(argv: list[str] | None = None) -> None:
             return
 
     browser = app_browser()
+    proc = None
     if browser:
-        subprocess.Popen([*browser, f"--app={url}", "--window-size=1320,880",
-                          f"--user-data-dir={d / 'browser-profile'}", "--no-first-run",
-                          "--no-default-browser-check"])
+        proc = subprocess.Popen([*browser, f"--app={url}", "--window-size=1320,880",
+                                 f"--user-data-dir={d / 'browser-profile'}", "--no-first-run",
+                                 "--no-default-browser-check"])
     else:
         webbrowser.open(url)
 
     app.last_ping = time.time() + 30  # grace period while the window starts
-    while time.time() - app.last_ping < 30:
+    while True:
         time.sleep(2)
-    print("no heartbeat, exiting")
+        reason = exit_reason(app, proc, time.time())
+        if reason:
+            print(reason)
+            break
     srv.shutdown()
+
+
+HEARTBEAT_TIMEOUT = 180  # browsers fire timers about once a minute in background windows
+RELOAD_GRACE = 8         # a reload sends "bye" and then pings again
+
+
+def exit_reason(app, proc, now: float) -> str | None:
+    """When to stop serving. The app window's browser process (own profile)
+    lives exactly as long as the window, so while it runs we keep serving no
+    matter how much the browser throttles a background window. Without that
+    process (default browser, or the window was handed to a running instance)
+    we fall back to the page's 'bye' beacon and heartbeats."""
+    if proc is not None and proc.poll() is None:
+        return None
+    bye = app.bye_at
+    if bye and app.last_ping <= bye and now - bye > RELOAD_GRACE:
+        return "window closed, exiting"
+    if now - app.last_ping > HEARTBEAT_TIMEOUT:
+        return "no heartbeat, exiting"
+    return None
 
 
 if __name__ == "__main__":

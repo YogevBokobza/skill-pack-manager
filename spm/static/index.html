@@ -80,6 +80,8 @@ td.desc { color: var(--muted); font-size: 12px; max-width: 520px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: none; background: var(--panel); padding: 6px 11px; font: inherit; color: var(--muted); cursor: pointer; }
 .seg button[aria-pressed=true] { background: var(--panel2); color: var(--fg); font-weight: 600; }
+#lost { background: var(--bad); color: #fff; padding: 10px 18px; display: flex; gap: 14px; align-items: center; justify-content: space-between; font-weight: 600; }
+#lost .btn { color: var(--fg); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
@@ -139,10 +141,23 @@ const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter(k => k !=
 const base = p => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
+const LOST = "The Skill Pack Manager background process is not running. Close this window and start the app again.";
+function showDisconnected() {
+  if ($("lost")) return;
+  document.body.prepend(h("div", { id: "lost", role: "alert" }, LOST,
+    h("button", { class: "btn", onclick: () => location.reload() }, "Try again")));
+}
 async function api(path, body) {
-  const r = await fetch(path, { method: body ? "POST" : "GET",
-    headers: { "X-SPM-Token": TOKEN, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined });
+  let r;
+  try {
+    r = await fetch(path, { method: body ? "POST" : "GET",
+      headers: { "X-SPM-Token": TOKEN, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined });
+  } catch (e) {  // network error: the local server is gone
+    showDisconnected();
+    throw new Error(LOST);
+  }
+  if ($("lost")) $("lost").remove();
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
@@ -901,6 +916,10 @@ $("reload").onclick = () => guard(refresh);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && $("modal").style.display === "flex") $("mfoot").firstChild.click(); });
 setInterval(() => api("/api/ping", {}).catch(() => {}), 5000);
 api("/api/ping", {}).catch(() => {});
+// closing (or reloading) the window: tell the server; it waits a few seconds for a reload
+addEventListener("pagehide", () => navigator.sendBeacon("/api/bye?t=" + encodeURIComponent(TOKEN)));
+// a window back from the background pings at once instead of waiting for a throttled timer
+document.addEventListener("visibilitychange", () => { if (!document.hidden) api("/api/ping", {}).catch(() => {}); });
 guard(refresh);
 </script>
 </body>

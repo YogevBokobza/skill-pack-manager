@@ -88,8 +88,11 @@ Shortcuts:
 
 Or install it as a command: `pip install .` and run `skill-pack-manager`.
 
-The app starts a local server on `127.0.0.1` and opens its window. It exits
-about 30 seconds after you close the window.
+The app starts a local server on `127.0.0.1` and opens its window. The server
+runs as long as the window is open, also when the window sits in the
+background, and stops a few seconds after you close it. In a regular browser
+tab (no Edge or Chrome found) it stops after the tab is closed, or after three
+minutes without a sign of life from the page.
 
 ## First run: cc-switch or standalone
 
@@ -259,7 +262,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 58 tests, Windows, macOS and Linux
+python -m unittest -v           # 63 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

@@ -34,6 +34,7 @@ class App:
         self.settings = Settings(self.data_dir / "settings.json")
         self.token = secrets.token_urlsafe(24)
         self.last_ping = time.time()
+        self.bye_at = 0.0  # set by the page's pagehide beacon (close or reload)
         self.usage_job = {"running": False, "error": None}
         self.ws = repo.Workspace(self.data_dir / "tmp")
         self.build()
@@ -275,6 +276,14 @@ def make_handler(app: App, port_ref: dict):
 
         def do_POST(self):
             u = urlparse(self.path)
+            if u.path == "/api/bye":
+                # navigator.sendBeacon cannot set headers, so the token comes in the query
+                token = (parse_qs(u.query).get("t") or [""])[0]
+                if self.headers.get("Host") != f"127.0.0.1:{port_ref['port']}" or \
+                        not secrets.compare_digest(token, app.token):
+                    return self._json(403, {"error": "forbidden"})
+                app.bye_at = time.time()
+                return self._json(200, {"ok": True})
             n = int(self.headers.get("Content-Length") or 0)
             if n > 1_000_000:
                 return self._json(413, {"error": "too large"})
