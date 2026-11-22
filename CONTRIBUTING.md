@@ -43,6 +43,7 @@ for the `claude` CLI so nothing is written to your real `~/.claude.json`.
 | `spm/mcp.py` | MCP catalog, Claude / OpenCode / Codex adapters (project and global), MCP plans |
 | `spm/sources.py` | where skills and MCP servers come from: cc-switch, or the program's own store |
 | `spm/repo.py` | git refs (branch, tags sorted by version), shallow clones, finding SKILL.md |
+| `spm/migrate.py` | migration from cc-switch: skills, MCP servers, project links, global skills |
 | `spm/usage.py` | counts skill use in past Claude Code, OpenCode and Codex sessions |
 | `spm/server.py` | local HTTP API (token + Host check) |
 | `spm/static/index.html` | the whole UI, plain JavaScript, no build step |

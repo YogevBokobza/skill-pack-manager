@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import mcp, repo
+from . import mcp, migrate, repo
 from .core import Config, Model, OpError, UnsafeRemoval
 from .mcp import McpError
 from .osinfo import WINDOWS, MACOS, data_dir, open_path
@@ -49,15 +49,30 @@ class App:
         else:
             cfg = Config.default(s["scan_roots"])
         if s["mode"] == "standalone":
-            h = cfg.home
-            source = LocalSource(
-                self.data_dir / "store",
-                global_skill_dirs={"claude": h / ".claude" / "skills", "opencode": h / ".config" / "opencode" / "skills",
-                                   "codex": h / ".codex" / "skills"},
-                global_mcp=mcp.global_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.opencode_dir))
+            source = self.local_source(cfg)
         else:  # cc-switch, or not chosen yet (the UI shows the first-run question)
             source = CcSwitchSource(cfg.store, cfg.db)
         self.model = Model(cfg, source)
+
+    def local_source(self, cfg: Config) -> LocalSource:
+        h = cfg.home
+        return LocalSource(
+            self.data_dir / "store",
+            global_skill_dirs={"claude": h / ".claude" / "skills", "opencode": h / ".config" / "opencode" / "skills",
+                               "codex": h / ".codex" / "skills"},
+            global_mcp=mcp.global_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.opencode_dir))
+
+    def migrate(self, b: dict) -> dict:
+        cfg = self.model.cfg
+        cc, local = CcSwitchSource(cfg.store, cfg.db), self.local_source(cfg)
+        p = migrate.plan(cc, local, self.model.load(), replace=bool(b.get("replace")))
+        if b.get("dry", True):
+            return p
+        res = migrate.apply(p, cc, local, self.data_dir, relink=bool(b.get("relink", True)),
+                            take_over_global=bool(b.get("take_over_global", True)))
+        self.settings.update({"mode": "standalone"})
+        self.build()
+        return res
 
     def local(self) -> LocalSource:
         if not isinstance(self.model.source, LocalSource):
@@ -116,6 +131,8 @@ class App:
                 raise OpError("path does not exist")
             open_path(b["path"])
             return {"ok": True}
+        if path == "/api/migrate":
+            return self.migrate(b)
         if path == "/api/usage":
             if not self.usage_job["running"]:
                 self.usage_job.update(running=True, error=None)

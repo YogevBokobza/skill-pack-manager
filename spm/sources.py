@@ -116,6 +116,7 @@ class LocalSource:
     def skills(self) -> dict[str, dict]:
         meta = self._load()["skills"]
         out = {}
+        self.store.mkdir(parents=True, exist_ok=True)  # recreated if deleted while running
         for p in sorted(self.store.iterdir()):
             if (p / "SKILL.md").is_file():
                 fm = read_frontmatter(p)

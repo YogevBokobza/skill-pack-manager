@@ -77,6 +77,24 @@ def app_browser() -> list[str] | None:
     return None
 
 
+def process_running(names: tuple[str, ...]) -> bool:
+    """True when a process with one of these executable names runs (case-insensitive)."""
+    if os.environ.get("SPM_IGNORE_PROCESSES"):  # tests and demos
+        return False
+    want = {n.lower() for n in names}
+    try:
+        if WINDOWS:
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                                 creationflags=NO_WINDOW, timeout=20).stdout
+            running = {line.split('","')[0].strip('"').lower() for line in out.splitlines() if line}
+        else:
+            out = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=20).stdout
+            running = {Path(line.strip()).name.lower() for line in out.splitlines() if line.strip()}
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(want & running)
+
+
 def restrict_file(p: Path) -> None:
     """Owner-only permissions for files that hold secrets (no-op on Windows,
     where the per-user data folder is already private)."""

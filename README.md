@@ -107,6 +107,32 @@ Choose cc-switch if you already use it: the app reads its skills and MCP servers
 and handles only the per-project part. Choose standalone if you don't: the app
 does the whole job.
 
+### Migrating from cc-switch
+
+If cc-switch is on the computer, **Settings** shows **Migrate from cc-switch**.
+It is also offered when you pick standalone on first run. The preview lists
+every step, and you can turn the last two off:
+
+1. **Skills** are copied from the cc-switch store into the app's store, with
+   their GitHub source (owner, repo, branch, path), so **Check for updates** and
+   **Version…** keep working. A name already used in the app's store is skipped
+   unless you tick *Replace*.
+2. **MCP servers** are copied into the catalog with their settings and secrets.
+3. **Project links** that point into the cc-switch store are re-pointed to the
+   new store, so your packs keep working.
+4. **Global skills** that cc-switch enabled for Claude Code, OpenCode or Codex:
+   cc-switch's copies in the agents' skill folders move to a backup folder
+   (`<data folder>/migration-backup/<time>`) and are replaced with links.
+
+Global MCP entries need no step: cc-switch already wrote them into the agents'
+configs, and the catalog recognizes them by name. cc-switch's own files are
+never changed, and agents the app does not manage (Gemini, Cursor, ...) are left
+alone. The migration refuses to run while cc-switch is open, because cc-switch
+rewrites the agents' skill folders; afterwards, stop it from syncing skills and
+MCP servers. You can run the migration again later to pick up anything new.
+
+![Migration preview](docs/images/migrate.jpg)
+
 ## How to use
 
 1. **Get skills into the store.** In standalone mode, open **Skills**, click
@@ -233,7 +259,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 53 tests, Windows, macOS and Linux
+python -m unittest -v           # 58 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

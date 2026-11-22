@@ -760,6 +760,12 @@ function renderSettings() {
       modeCard("cc-switch", "cc-switch", "cc-switch installs skills and holds MCP servers. This program reads them and manages packs per project."),
       modeCard("standalone", "This program (standalone)", "No cc-switch needed: install skills from git repositories, keep your MCP servers here, switch both on globally or per project.")),
     h("p", { class: "muted", style: "font-size:12px" }, "Switching changes the store the packs refer to. Skills that are not in the new store show as missing until you install them there."),
+    st.ccswitch_detected ? h("div", { class: "card", style: "margin-top:14px" },
+      h("div", { class: "row" }, h("div", { style: "flex:1" },
+        h("b", {}, "Migrate from cc-switch"),
+        h("div", { class: "muted", style: "font-size:12px; margin-top:4px" },
+          "Copies cc-switch's skills (with their GitHub sources) and MCP servers into this program, re-points your projects' links, and switches to standalone mode. cc-switch's own files are not changed. You can run it again later to pick up anything new.")),
+        h("button", { class: "btn primary", onclick: migrateFromCcSwitch }, "Migrate from cc-switch…"))) : null,
     h("h3", {}, "Project folders to scan"),
     roots,
     h("div", { class: "row" }, h("button", { class: "btn", onclick: () => guard(async () => { const r = await api("/api/pick-folder", {}); if (r.folder) saveRoots([...set.scan_roots, r.folder]); }) }, "Choose folder…"),
@@ -770,6 +776,51 @@ function renderSettings() {
         h("tr", {}, h("td", { class: "muted" }, k), h("td", { style: "word-break:break-all" }, v),
           h("td", {}, h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: v.replace(/[\\/][^\\/]*\.json$/, "") })) }, "Open")))))));
 }
+async function migrateFromCcSwitch() {
+  await guard(async () => {
+    const p = await api("/api/migrate", { dry: true });
+    const list = (items, empty) => items.length ? h("div", { class: "muted", style: "font-size:12px; margin:2px 0 0 22px; word-break:break-word" }, items.join(", ")) : (empty ? h("div", { class: "muted", style: "font-size:12px; margin-left:22px" }, empty) : null);
+    const byClient = {};
+    for (const [c, d, kind] of p.global) (byClient[c] = byClient[c] || []).push(kind === "copy" ? d : `${d} (${kind === "link" ? "link" : kind === "missing" ? "new link" : "left alone"})`);
+    const replace = h("input", { type: "checkbox" });
+    const relink = h("input", { type: "checkbox", checked: true });
+    const global = h("input", { type: "checkbox", checked: true });
+    const item = (label, n, detail) => h("div", { style: "margin:8px 0" }, h("b", {}, `${n}`), " ", label, detail);
+    const ok = await openModal("Migrate from cc-switch", [
+      p.ccswitch_running ? h("p", { class: "b-bad" }, "cc-switch is running. Quit it (also from the system tray), then press Check again.") : null,
+      ...p.warnings.filter(w => !w.startsWith("cc-switch is running")).map(w => h("p", { class: "b-warn" }, w)),
+      item("skills to copy into this program's store", p.skills_copy.length, list(p.skills_copy)),
+      p.skills_done.length ? item("skills already migrated", p.skills_done.length, null) : null,
+      p.skills_skip.length ? h("div", {}, item("skills with a name already used in this store", p.skills_skip.length, list(p.skills_skip)),
+        h("label", { class: "row", style: "margin-left:22px" }, replace, "Replace them with cc-switch's version")) : null,
+      item("MCP servers to copy (with their settings and secrets)", p.mcp_copy.length, list(p.mcp_copy)),
+      p.mcp_skip.length ? item("MCP servers already in the catalog, kept", p.mcp_skip.length, list(p.mcp_skip)) : null,
+      p.mcp_invalid.length ? item("MCP servers that cannot be read, skipped", p.mcp_invalid.length, list(p.mcp_invalid)) : null,
+      h("label", { class: "row", style: "margin-top:12px; flex-wrap:nowrap; align-items:flex-start" }, relink, h("span", { style: "flex:1" }, h("b", {}, `Re-point ${p.relink.length} project links`), " from the cc-switch store to this program's store, so your packs keep working")),
+      h("label", { class: "row", style: "margin-top:8px; flex-wrap:nowrap; align-items:flex-start" }, global, h("span", { style: "flex:1" }, h("b", {}, `Take over ${p.global.length} global skills`),
+        " for Claude, OpenCode and Codex: cc-switch's copies in the agents' skill folders move to a backup folder and become links to this store")),
+      ...Object.entries(byClient).map(([c, ds]) => h("div", { class: "muted", style: "font-size:12px; margin:2px 0 0 22px" }, `${CLIENT_LABEL[c]}: ${ds.join(", ")}`)),
+      h("p", { class: "muted", style: "font-size:12px; margin-top:12px" },
+        "Afterwards the program runs in standalone mode. Don't let cc-switch sync skills or MCP servers any more: it would write over what this program now manages."),
+    ], [{ label: "Cancel" },
+        p.ccswitch_running ? { label: "Check again", run: async () => { setTimeout(migrateFromCcSwitch, 0); return true; } } : null,
+        { label: "Migrate", primary: true, busy: "Migrating…", run: async () => {
+          if (p.ccswitch_running) throw new Error("Quit cc-switch first");
+          return (S.migration = await api("/api/migrate", { dry: false, replace: replace.checked, relink: relink.checked, take_over_global: global.checked }));
+        } }].filter(Boolean), true);
+    if (!ok || ok === true && !S.migration) return;
+    const r = S.migration; S.migration = null;
+    await refresh();
+    await openModal(r.errors.length ? "Migration finished with errors" : "Migration finished", [
+      h("p", {}, `${plural(r.log.length, "change")} made. The program is now in standalone mode.`),
+      r.backup ? h("p", { class: "muted" }, "cc-switch's copies were moved to: ", h("code", {}, r.backup)) : null,
+      r.errors.length ? h("div", {}, h("h3", {}, "Errors"), h("ul", {}, ...r.errors.map(e => h("li", { class: "b-bad" }, e)))) : null,
+      h("details", {}, h("summary", {}, "Full log"), h("pre", { class: "preview" }, r.log.join("\n"))),
+    ], [{ label: "Close" }]);
+    S.tab = "skills"; render();
+  });
+}
+
 async function setMode(mode) {
   await guard(async () => { await api("/api/settings", { mode }); S.updates = null; toast(`Mode: ${mode}`); await refresh(); });
 }
@@ -792,6 +843,8 @@ async function firstRun() {
     h("p", { class: "muted", style: "font-size:12px" }, "You can change this later in Settings."),
   ], [{ label: "Later" }, { label: "Continue", primary: true, run: async () => { await api("/api/settings", { mode }); } }], true);
   await refresh();
+  // leaving cc-switch: offer to bring its skills and MCP servers along
+  if (mode === "standalone" && st.ccswitch_detected && S.state.settings.mode === "standalone") await migrateFromCcSwitch();
 }
 
 // Scan ------------------------------------------------------------------
