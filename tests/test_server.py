@@ -1,0 +1,98 @@
+import json
+import urllib.error
+import urllib.request
+
+from spm.server import App, serve
+from tests.test_core import Env
+
+
+class Server(Env):
+    def setUp(self):
+        super().setUp()
+        self.app = App(self.cfg)
+        self.srv, self.port = serve(self.app)
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        super().tearDown()
+
+    def call(self, path, body=None, token=True, host=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                     data=json.dumps(body).encode() if body is not None else None)
+        if token:
+            req.add_header("X-SPM-Token", self.app.token)
+        if host:
+            req.add_header("Host", host)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def test_rejects_missing_token(self):
+        self.assertEqual(self.call("/api/state", token=False)[0], 403)
+
+    def test_rejects_foreign_host(self):
+        self.assertEqual(self.call("/api/state", host="evil.example:80")[0], 403)
+
+    def test_state_and_op_roundtrip(self):
+        code, st = self.call("/api/state")
+        self.assertEqual(code, 200)
+        self.assertEqual({p["name"] for p in st["packs"]}, {"one", "two"})
+        code, res = self.call("/api/op", {"op": "attach", "args": {"pack": "one", "folder": str(self.proj)}, "dry": False})
+        self.assertEqual(code, 200)
+        self.assertEqual(len(res["log"]), 6)
+        code, v = self.call("/api/folder?path=" + urllib.request.quote(str(self.proj)))
+        self.assertTrue(v["in_sync"])
+
+    def test_bad_op_is_400(self):
+        code, res = self.call("/api/op", {"op": "attach", "args": {"pack": "nope", "folder": "x"}, "dry": True})
+        self.assertEqual(code, 400)
+        self.assertIn("no such pack", res["error"])
+
+    def test_theme_is_saved_and_served_in_html(self):
+        def page():
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as r:
+                return r.read().decode()
+        self.assertIn('data-theme-pref="system"', page())
+        code, s = self.call("/api/settings", {"theme": "dark"})
+        self.assertEqual((code, s["theme"]), (200, "dark"))
+        self.assertIn('data-theme-pref="dark"', page())
+        self.assertEqual(App(self.cfg).settings.load()["theme"], "dark")  # survives a restart
+
+    def test_first_run_then_mode_switch(self):
+        code, st = self.call("/api/state")
+        self.assertIsNone(st["settings"]["mode"])  # the UI asks
+        self.assertEqual(st["mode"], "cc-switch")
+        code, res = self.call("/api/repo/refs", {"url": "https://example.test/x.git"})
+        self.assertEqual(code, 400)
+        self.assertIn("standalone mode", res["error"])
+        self.call("/api/settings", {"mode": "standalone"})
+        code, st = self.call("/api/state")
+        self.assertEqual((st["mode"], st["editable"]), ("standalone", True))
+        self.assertEqual(st["skills"], [])  # own, empty store
+        self.assertTrue(st["config"]["store"].startswith(str(self.cfg.data_dir)))
+        code, res = self.call("/api/mcp/save", {"name": "srv", "config": {"command": "node", "env": {"K": "secret-x"}}})
+        self.assertEqual(code, 200)
+        code, st = self.call("/api/state")
+        self.assertEqual(st["mcp"][0]["env_keys"], ["K"])
+        self.assertNotIn("secret-x", json.dumps(st))
+        code, res = self.call("/api/settings", {"mode": "nope"})
+        self.assertEqual(code, 400)
+
+    def test_scan_roots_setting(self):
+        code, s = self.call("/api/settings", {"scan_roots": [str(self.other)]})
+        self.assertEqual(code, 200)
+        code, st = self.call("/api/state")
+        self.assertEqual(st["settings"]["scan_roots"], [str(self.other)])
+
+    def test_bad_theme_rejected(self):
+        code, res = self.call("/api/settings", {"theme": "\"><script>"})
+        self.assertEqual(code, 400)
+
+    def test_index_served(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as r:
+            self.assertIn(b"Skill Pack Manager", r.read())

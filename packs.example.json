@@ -1,0 +1,25 @@
+{
+  "packs": {
+    "web": {
+      "skills": ["frontend-design", "accessibility-review", "playwright-testing"],
+      "mcp": ["browser-tools"],
+      "paths": ["~/Projects/shop-frontend", "~/Projects/landing-page"]
+    },
+    "game-dev": {
+      "skills": ["game-feel", "level-design", "shader-programming"],
+      "mcp": [],
+      "paths": ["~/Projects/space-shooter"]
+    },
+    "docs": {
+      "skills": ["technical-writing", "changelog"],
+      "mcp": [],
+      "paths": []
+    }
+  },
+  "folders": {
+    "~/Projects/shop-frontend": {
+      "skills": ["stripe-integration"],
+      "mcp": ["postgres"]
+    }
+  }
+}
