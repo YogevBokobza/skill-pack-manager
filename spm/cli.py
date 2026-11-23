@@ -7,6 +7,10 @@ and agents.
   spm detach PACK [FOLDER]
   spm extra add|remove SKILL [FOLDER]
   spm pack add|remove PACK SKILL...
+  spm pack include|exclude PACK OTHER   a pack that brings another pack along
+  spm export PACK... [-o FILE]   a pack file: packs, skill sources, MCP servers without secrets
+  spm import FILE [FOLDER]       preview a pack file, then add its packs (and attach them)
+  spm manifest [FOLDER]          the folder's .skillpacks.json; --write PACK... creates it
   spm packs                      packs with their skills, MCP servers, folders
   spm skills [QUERY]             skills in the store
   spm tokens [FOLDER]            estimated context cost per agent
@@ -34,7 +38,7 @@ from .mcp import McpError
 from .sources import SourceError
 
 COMMANDS = ("status", "sync", "attach", "detach", "extra", "pack", "packs", "skills", "tokens", "usage", "suggest",
-            "scan", "check-updates", "update", "rollback")
+            "scan", "check-updates", "update", "rollback", "export", "import", "manifest")
 LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini": "Gemini CLI"}
 
 
@@ -69,10 +73,21 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=("add", "remove"))
     p.add_argument("skill")
     p.add_argument("folder", nargs="?")
-    p = cmd("pack", "add skills to a pack or remove them", change=True)
-    p.add_argument("action", choices=("add", "remove"))
+    p = cmd("pack", "add or remove skills, or include another pack", change=True)
+    p.add_argument("action", choices=("add", "remove", "include", "exclude"))
     p.add_argument("pack")
-    p.add_argument("skills", nargs="+")
+    p.add_argument("skills", nargs="+", help="skills (add, remove) or one pack (include, exclude)")
+    p = cmd("export", "write a pack file")
+    p.add_argument("packs", nargs="+")
+    p.add_argument("-o", "--output", help="file to write (default: print it)")
+    p = cmd("import", "add the packs of a pack file", change=True)
+    p.add_argument("file")
+    p.add_argument("folder", nargs="?", help="attach the file's \"attach\" packs to this folder")
+    p.add_argument("--replace", action="store_true", help="replace packs that exist with other content")
+    p = cmd("manifest", "show or write the folder's .skillpacks.json", change=True)
+    p.add_argument("folder", nargs="?")
+    p.add_argument("--write", nargs="+", metavar="PACK", help="write .skillpacks.json asking for these packs")
+    p.add_argument("--apply", action="store_true", help="add and attach the packs it asks for")
     cmd("packs", "list packs")
     cmd("skills", "list skills in the store").add_argument("query", nargs="?", default="")
     cmd("tokens", "estimated context cost per agent", folder=True)
@@ -182,6 +197,12 @@ class Cli:
         return self.change(op, {"folder": f, "skill": self.a.skill}, f"{self.a.action.title()} {self.a.skill} in {f}")
 
     def c_pack(self):
+        if self.a.action in ("include", "exclude"):
+            if len(self.a.skills) != 1:
+                raise CliError(f"pack {self.a.action} takes one pack")
+            other = self.a.skills[0]
+            return self.change(f"pack_{self.a.action}", {"pack": self.a.pack, "include": other},
+                               f"{self.a.pack} {'includes' if self.a.action == 'include' else 'stops including'} {other}")
         op = "pack_add_skills" if self.a.action == "add" else "pack_remove_skills"
         verb = "Add to" if self.a.action == "add" else "Remove from"
         return self.change(op, {"pack": self.a.pack, "skills": self.a.skills}, f"{verb} {self.a.pack}: {', '.join(self.a.skills)}")
@@ -340,6 +361,89 @@ class Cli:
                 self.p("all skills are up to date")
         return self.emit(u, text)
 
+
+    # ---------------------------------------------------------------- sharing
+
+    def c_export(self):
+        from . import share
+        b = share.export(self.m, self.m.load(), self.a.packs)
+        text = json.dumps(b, indent=2, ensure_ascii=False) + "\n"
+        if self.a.output:
+            Path(self.a.output).write_text(text, encoding="utf8")
+            if not self.a.json:
+                self.p(f"wrote {self.a.output}: {len(b['packs'])} packs, {len(b['skills'])} skills, {len(b['mcp'])} MCP servers")
+            return 0
+        self.out.write(text)
+        return 0
+
+    def show_import(self, pv: dict) -> None:
+        if self.a.json:
+            self.p(json.dumps({k: v for k, v in pv.items() if k != "bundle"}, indent=2, ensure_ascii=False))
+            return
+        for w in pv["warnings"]:
+            self.p(f"! {w}")
+        for p in pv["packs"]:
+            self.p(f"pack {p['name']}: {p['status']} ({len(p['skills'])} skills, {len(p['mcp'])} MCP"
+                   + (f", includes {', '.join(p['includes'])}" if p["includes"] else "") + ")")
+        for s in pv["skills"]:
+            src = s["source"] or {}
+            self.p(f"  skill {s['dir']:<30} {s['status']}" + (f"  {src['url']} @ {src['ref']}" if src.get("url") else ""))
+        for m in pv["mcp"]:
+            self.p(f"  mcp   {m['name']:<30} {m['status']}")
+
+    def run_import(self, bundle: dict, folder: str | None) -> int:
+        from . import share
+        pv = share.preview(self.m, self.m.load(), bundle, self.a.replace if hasattr(self.a, "replace") else False)
+        self.show_import(pv)
+        stop = self.confirm()
+        if stop is not None:
+            return stop
+        for line in self.app.add_shared_mcp(bundle):
+            self.p(line)
+        self.a.yes = True  # already confirmed; the link plan prints next
+        code = self.change("import_packs", {"bundle": bundle, "replace": getattr(self.a, "replace", False),
+                                            "folder": folder}, "Import")
+        repos = [r for r in pv["repos"]]
+        if repos:
+            self.p("missing skills to install (the app shows each SKILL.md and the safety check):")
+            for r in repos:
+                self.p(f"  {r['url']} @ {r['ref']}: {', '.join(r['dirs'])}")
+        return code
+
+    def c_import(self):
+        from . import share
+        bundle = share.parse(Path(self.a.file).read_text(encoding="utf8"))
+        folder = str(Path(self.a.folder).resolve()) if self.a.folder else None
+        return self.run_import(bundle, folder)
+
+    def c_manifest(self):
+        from . import share
+        f = self.known(self.folder())
+        if self.a.write:
+            target = Path(f) / share.MANIFEST
+            b = share.export(self.m, self.m.load(), self.a.write, self.a.write)
+            self.p(f"write {target}" + (" (replaces the existing file)" if target.exists() else ""))
+            stop = self.confirm()
+            if stop is not None:
+                return stop
+            target.write_text(json.dumps(b, indent=2, ensure_ascii=False) + "\n", encoding="utf8")
+            self.p("done; commit it to share the packs")
+            return 0
+        m = share.read_manifest(f)
+        if m is None:
+            raise CliError(f"no {share.MANIFEST} in {f}")
+        if "error" in m:
+            raise CliError(m["error"])
+        if self.a.apply:
+            self.a.replace = False
+            return self.run_import(m, f)
+        summary = share.manifest_summary(self.m.load(), f)
+
+        def text():
+            self.p(f"{Path(f) / share.MANIFEST} asks for: {', '.join(m['attach']) or 'no packs'}")
+            self.p("matches packs.json" if summary["done"] else "not applied yet: spm manifest --apply")
+            self.show_import(share.preview(self.m, self.m.load(), m))
+        return self.emit(summary | {"manifest": m}, text)
 
     def confirm(self) -> int | None:
         """None to go on; an exit code to stop with."""

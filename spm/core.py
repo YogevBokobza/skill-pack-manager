@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import insights, mcp, repo, router, usage
+from . import insights, mcp, packset, repo, router, usage
 from .osinfo import (APP_ROOT, HOME, NO_WINDOW, PROJECT_SKILL_DIRS as SKILL_DIRS, claude_cli, data_dir,
                      default_scan_roots, is_link, make_junction)
 from .sources import CcSwitchSource
@@ -238,6 +238,11 @@ def mcp_extras_of(data: dict, folder) -> list[str]:
     return []
 
 
+def share_summary(data: dict, folder):
+    from . import share
+    return share.manifest_summary(data, folder) if Path(folder).is_dir() else None
+
+
 def router_name(pack: str) -> str:
     return router.name_for(pack)
 
@@ -251,7 +256,7 @@ def desired(data: dict, folder) -> dict[str, list[str]]:
     """Skills to link into the agents' skill folders. A pack with a router in
     "instead" mode contributes only its router here (see hidden())."""
     out: dict[str, list[str]] = {}
-    for name in packs_of(data, folder):
+    for name in packset.active(data, folder):
         p = data["packs"][name]
         r = router_of(p)
         if r:
@@ -268,7 +273,7 @@ def routed(data: dict, folder) -> dict[str, list[str]]:
     """Skills a folder reaches only through a pack router ("instead" mode).
     They are not linked into the project: they live inside the router."""
     out: dict[str, list[str]] = {}
-    for name in packs_of(data, folder):
+    for name in packset.active(data, folder):
         p = data["packs"][name]
         r = router_of(p)
         if r and r.get("mode", "instead") == "instead":
@@ -404,7 +409,7 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
                 if name not in lst:
                     raise OpError(f"{name!r} is not in pack {a['pack']!r}")
                 lst.remove(name)
-            return list(p["paths"])
+            return packset.folders_using(data, a["pack"])
         folders = data.setdefault("folders", {})
         key = _folder_entry(data, a["folder"])
         if op == "mcp_extra_add":
@@ -428,10 +433,31 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
         packs[name] = {"skills": [], "mcp": [], "paths": []}
         return []
     if op == "delete_pack":
-        p = _check_pack(data, a["pack"])
-        folders = list(p["paths"])
+        _check_pack(data, a["pack"])
+        users = [n for n in packset.including(data, a["pack"]) if n != a["pack"]]
+        if users:
+            raise OpError(f"{a['pack']!r} is included by {', '.join(users)}; remove it there first")
+        folders = packset.folders_using(data, a["pack"])
         del packs[a["pack"]]
         return folders
+    if op in ("pack_include", "pack_exclude"):
+        p = _check_pack(data, a["pack"])
+        inc = a.get("include", "")
+        _check_pack(data, inc)
+        lst = p.setdefault("includes", [])
+        if op == "pack_include":
+            if packset.would_cycle(data, a["pack"], inc):
+                raise OpError(f"{inc!r} already includes {a['pack']!r}, directly or through other packs")
+            if inc in lst:
+                raise OpError(f"{a['pack']!r} already includes {inc!r}")
+            lst.append(inc)
+        else:
+            if inc not in lst:
+                raise OpError(f"{a['pack']!r} does not include {inc!r}")
+            lst.remove(inc)
+            if not lst:
+                del p["includes"]
+        return packset.folders_using(data, a["pack"])
     if op in ("pack_add_skill", "pack_remove_skill"):
         p = _check_pack(data, a["pack"])
         s = a["skill"]
@@ -443,7 +469,7 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
             if s not in p["skills"]:
                 raise OpError(f"{s!r} is not in pack {a['pack']!r}")
             p["skills"].remove(s)
-        return list(p["paths"])
+        return packset.folders_using(data, a["pack"])
     if op in ("pack_add_skills", "pack_remove_skills"):
         # bulk version from the Skills tab: one preview for many skills
         p = _check_pack(data, a["pack"])
@@ -462,7 +488,7 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
             if not gone:
                 raise OpError(f"none of the selected skills is in {a['pack']!r}")
             p["skills"] = [s for s in p["skills"] if s not in gone]
-        return list(p["paths"])
+        return packset.folders_using(data, a["pack"])
     if op == "attach":
         p = _check_pack(data, a["pack"])
         folder = _check_folder(a["folder"])
@@ -502,15 +528,23 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
         if (store / name / "SKILL.md").is_file() or name in p["skills"]:
             raise OpError(f"a skill named {name!r} already exists in the store; rename the pack or that skill")
         p["router"] = {"enabled": True, "mode": mode}
-        return list(p["paths"])
+        return packset.folders_using(data, a["pack"])
     if op == "router_remove":
         p = _check_pack(data, a["pack"])
         if not router_of(p):
             raise OpError(f"pack {a['pack']!r} has no router")
         p.pop("router", None)
-        return list(p["paths"])
+        return packset.folders_using(data, a["pack"])
     if op == "sync":
         return [a["folder"]]
+    if op == "import_packs":
+        from . import share
+        try:
+            b = share.parse(a.get("bundle"))
+            folder = _check_folder(a["folder"]) if a.get("folder") else None
+            return share.apply_packs(data, b, bool(a.get("replace")), folder)
+        except share.ShareError as e:
+            raise OpError(str(e)) from e
     raise OpError(f"unknown operation {op!r}")
 
 
@@ -730,6 +764,8 @@ class Model:
         catalog = catalog or self.mcp_catalog()
         p = self.full_plan(data, f, catalog)
         return {"folder": folder, "exists": f.is_dir(), "packs": packs_of(data, f),
+                "via": [n for n in packset.active(data, f) if n not in packs_of(data, f)],
+                "manifest": share_summary(data, f),
                 "extras": extras_of(data, f), "mcp_extras": mcp_extras_of(data, f), "skills": skills,
                 "mcp": self.mcp_view(data, f, catalog, p), "cost": insights.folder_cost(self, data, f),
                 "in_sync": not (p["add"] or p["remove"] or p["mcp_add"] or p["mcp_remove"]), "plan": p}
@@ -777,6 +813,8 @@ class Model:
                             "mcp": [m["name"] for m in v["mcp"] if m["sources"]],
                             "in_sync": v["in_sync"], "counts": counts})
         packs = [{"name": n, "skills": p["skills"], "mcp": p.get("mcp", []), "paths": p["paths"],
+                  "includes": packset.includes(data, n),
+                  "included_by": [x for x in data["packs"] if n in packset.includes(data, x)],
                   "router": self.router_info(data, n)}
                  for n, p in data["packs"].items()]
         in_packs: dict[str, list[str]] = {}
@@ -864,7 +902,8 @@ class Model:
                                   "subdir": sub.name if sub else None,
                                   "worktree": (root / ".git").is_file(),
                                   "packs": packs_of(data, root), "extras": extras_of(data, root),
-                                  "has_links": links or has_links(root)})
+                                  "has_links": links or has_links(root),
+                                  "manifest": (root / ".skillpacks.json").is_file()})
                     continue  # a project's own subfolders are not separate projects
                 if depth < max_depth:
                     walk(c, depth + 1)

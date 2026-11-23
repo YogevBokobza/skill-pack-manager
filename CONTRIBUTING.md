@@ -45,6 +45,8 @@ for the `claude` CLI so nothing is written to your real `~/.claude.json`.
 | `spm/repo.py` | git refs (branch, tags sorted by version), shallow clones, finding SKILL.md, folder diffs |
 | `spm/scan.py` | pattern checks of a skill's files before install and update (read as text, never run) |
 | `spm/router.py` | pack routers: template, AI writers (Claude/Codex CLI, Anthropic/OpenAI API), rendering, storage |
+| `spm/packset.py` | packs that include packs: expansion, cycle checks, which folders a pack change touches |
+| `spm/share.py` | pack files and `.skillpacks.json`: export without secrets, strict parsing, import preview |
 | `spm/migrate.py` | migration from cc-switch: skills, MCP servers, project links, global skills |
 | `spm/usage.py` | counts skill use in past Claude Code, OpenCode and Codex sessions |
 | `spm/insights.py` | context cost estimates, cleanup suggestions, project stack tags and pack suggestions (read-only) |

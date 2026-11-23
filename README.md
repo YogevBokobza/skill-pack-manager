@@ -29,7 +29,18 @@ in which folder and for which agent. Nothing happens until you press Apply.
 ## Features
 
 - **Packs per project.** Create packs, attach them to folders, add single extra
-  skills or MCP servers to one folder only.
+  skills or MCP servers to one folder only. A pack can include other packs:
+  `game-dev` can bring `docs` along, and changing `docs` updates every folder
+  that gets it through `game-dev`.
+- **Share packs.** **Export…** on a pack writes a pack file: the packs, where
+  each skill comes from (repository, ref, path, commit) and the MCP servers,
+  with secret values left empty. **Import…** in Packs shows what a file adds
+  before anything changes, and missing skills go through the usual install
+  dialog with its safety check.
+- **Packs in the repository.** **Share in repo…** writes `.skillpacks.json` in
+  a project. Whoever clones it and opens the folder in the app sees "This
+  repository suggests packs" and can review and attach them. The app never
+  applies the file on its own.
 - **Pack routers.** One generated skill (`using-<pack>`, invoked as `/using-<pack>`) that stands in for a
   whole pack: agents see one description instead of one per skill, and the
   router's index tells them which skill to read (the index-skill pattern of
@@ -138,6 +149,12 @@ python -m spm detach web
 python -m spm sync --all
 python -m spm extra add stripe-integration
 python -m spm pack add web frontend-design webapp-testing
+python -m spm pack include game-dev docs
+python -m spm export web -o web.skillpack.json
+python -m spm import web.skillpack.json  # preview, then add the packs
+python -m spm manifest                   # the current folder's .skillpacks.json
+python -m spm manifest --write web       # create it; commit it to share
+python -m spm manifest --apply           # add and attach what it asks for
 python -m spm tokens                     # estimated context cost per folder and agent
 python -m spm usage --count              # read the session logs, then list skill use
 python -m spm suggest --days 90          # cleanup suggestions, each with the command that does it
@@ -368,7 +385,8 @@ Your packs live in `packs.json` in the app folder. It is ignored by git; see
 }
 ```
 
-`folders` holds the extras for single folders. You can edit the file by hand;
+`folders` holds the extras for single folders. A pack can also have
+`"includes": ["other-pack"]`. You can edit the file by hand;
 the app reads it on every action. Before each save it keeps a backup of the
 previous version (last 50) in the data folder.
 
@@ -383,6 +401,28 @@ previous version (last 50) in the data folder.
 It holds `settings.json`, the standalone store (`store/skills`, `store/catalog.json`,
 earlier skill versions in `store/history`), the last update check (`updates.json`),
 `packs.json` backups, the usage cache and the log (`spm.log`).
+
+### Pack files and .skillpacks.json
+
+Both use the same JSON format:
+
+```json
+{
+  "format": "skill-pack-manager", "version": 1,
+  "packs": { "web": { "skills": ["frontend-design"], "mcp": ["browser"], "includes": [] } },
+  "skills": { "frontend-design": { "url": "https://github.com/anthropics/skills", "ref": "main",
+                                   "path": "skills/frontend-design", "commit": "..." } },
+  "mcp": { "browser": { "type": "stdio", "command": "npx", "args": ["-y", "browser-mcp"], "env": { "TOKEN": "" } } },
+  "attach": ["web"]
+}
+```
+
+`attach` appears only in `.skillpacks.json`: the packs that folder should get.
+Reading a file checks every name, URL, ref and path, the same way the app
+checks its own input. A pack that already exists with other content is kept
+unless you choose to replace it. MCP servers the catalog lacks are added with
+empty secrets for you to fill in (standalone mode). A file in a repository is
+written by whoever controls the repository, so review it like any download.
 
 ## Safety
 

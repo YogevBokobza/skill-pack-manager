@@ -488,11 +488,11 @@ def global_adapters(claude_json: Path, claude_cli: Path, codex_global: Path, ope
 # -------------------------------------------------------------- desired/plan
 
 def desired(data: dict, folder) -> dict[str, list[str]]:
+    from .packset import active
     nf, out = norm(folder), {}
-    for pname, p in data["packs"].items():
-        if any(norm(x) == nf for x in p["paths"]):
-            for m in p.get("mcp", []):
-                out.setdefault(m, []).append(pname)
+    for pname in active(data, folder):
+        for m in data["packs"][pname].get("mcp", []):
+            out.setdefault(m, []).append(pname)
     for path, v in data.get("folders", {}).items():
         if norm(path) == nf:
             for m in v.get("mcp", []):
