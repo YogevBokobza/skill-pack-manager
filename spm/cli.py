@@ -11,6 +11,8 @@ and agents.
   spm export PACK... [-o FILE]   a pack file: packs, skill sources, MCP servers without secrets
   spm import FILE [FOLDER]       preview a pack file, then add its packs (and attach them)
   spm manifest [FOLDER]          the folder's .skillpacks.json; --write PACK... creates it
+  spm agents [AGENT on|off|auto] which agents are managed; switching one off, then
+                                 spm sync --all removes what was added for it
   spm router-test PACK           test a pack router with the AI writer (--cases FILE, --write-cases)
   spm packs                      packs with their skills, MCP servers, folders
   spm skills [QUERY]             skills in the store
@@ -39,7 +41,7 @@ from .mcp import McpError
 from .sources import SourceError
 
 COMMANDS = ("status", "sync", "attach", "detach", "extra", "pack", "packs", "skills", "tokens", "usage", "suggest",
-            "scan", "check-updates", "update", "rollback", "export", "import", "manifest", "router-test")
+            "scan", "check-updates", "update", "rollback", "export", "import", "manifest", "router-test", "agents")
 LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini": "Gemini CLI"}
 
 
@@ -85,6 +87,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("folder", nargs="?", help="attach the file's \"attach\" packs to this folder")
     p.add_argument("--replace", action="store_true", help="replace packs that exist with other content")
+    p = cmd("agents", "show or switch the agents this program manages")
+    p.add_argument("agent", nargs="?", choices=("claude", "opencode", "codex", "gemini"))
+    p.add_argument("state", nargs="?", choices=("on", "off", "auto"))
     p = cmd("router-test", "test whether agents open a pack router and pick the right skill")
     p.add_argument("pack")
     p.add_argument("--cases", help="file with 'skill: request' lines (default: the last test's requests)")
@@ -450,6 +455,26 @@ class Cli:
             self.p("matches packs.json" if summary["done"] else "not applied yet: spm manifest --apply")
             self.show_import(share.preview(self.m, self.m.load(), m))
         return self.emit(summary | {"manifest": m}, text)
+
+    def c_agents(self):
+        if self.a.agent:
+            if not self.a.state:
+                raise CliError("say on, off or auto")
+            if self.a.state == "auto" and self.a.agent != "gemini":
+                raise CliError("auto exists for gemini only (on when ~/.gemini exists)")
+            v = None if self.a.state == "auto" else self.a.state == "on"
+            self.app.settings.update({"agents": {self.a.agent: v}})
+            self.app.build()
+            self.m = self.app.model
+        on = list(self.m.agents)
+        out = {a: a in on for a in ("claude", "opencode", "codex", "gemini")}
+
+        def text():
+            for a, v in out.items():
+                self.p(f"{LABEL[a]:<12} {'on' if v else 'off'}")
+            if self.a.agent and self.a.state == "off":
+                self.p("run spm sync --all to remove what was added for it (it shows the plan first)")
+        return self.emit(out, text)
 
     def c_router_test(self):
         if self.a.cases:
