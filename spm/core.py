@@ -576,7 +576,7 @@ class Model:
                 for s in data["packs"][pack]["skills"]]
 
     def write_router(self, data: dict, pack: str, args: dict) -> bool:
-        """Write <pack>-pack from args (an edited draft) or from its saved meta,
+        """Write using-<pack> from args (an edited draft) or from its saved meta,
         and mirror the pack's skills into its references/ folder.
 
         The index lists each skill's own description unless the user wrote an
@@ -615,6 +615,9 @@ class Model:
         for name, p in data["packs"].items():
             if router_of(p):
                 try:
+                    old = self.routers.root / router.legacy_name(name)
+                    if os.path.lexists(old) and router.legacy_name(name) != router_name(name):
+                        router.remove_safely(old)  # projects re-link to using-<pack> on Sync
                     self.write_router(data, name, {})
                 except OSError as e:
                     print(f"router {name}: {e}")

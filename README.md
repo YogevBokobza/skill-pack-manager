@@ -30,7 +30,7 @@ in which folder and for which agent. Nothing happens until you press Apply.
 
 - **Packs per project.** Create packs, attach them to folders, add single extra
   skills or MCP servers to one folder only.
-- **Pack routers.** One generated skill (`<pack>-pack`) that stands in for a
+- **Pack routers.** One generated skill (`using-<pack>`, invoked as `/using-<pack>`) that stands in for a
   whole pack: agents see one description instead of one per skill, and the
   router's index tells them which skill to read (the index-skill pattern of
   Unity's agent plugin). Written from a template,
@@ -177,7 +177,7 @@ one listed skill whose body indexes the others, which live inside its own
 folder.
 
 ```
-<data folder>/routers/web-pack/
+<data folder>/routers/using-web/
   SKILL.md                                  the index
   references/frontend-design/
     frontend-design.md                      copy of the skill's SKILL.md
@@ -209,7 +209,7 @@ In a pack, click **Create router…**. The editor fills in the description from 
 template; click **Write** to have it written by AI (see below), or edit it. The
 index entry of each skill starts as the skill's own description; change one only
 to add something the description doesn't say. The router is saved as a skill
-named `<pack>-pack`, and every folder with the pack gets it.
+named `using-<pack>` (`/using-web` for a pack named `web`), and every folder with the pack gets it.
 
 Each pack chooses a mode:
 
@@ -336,7 +336,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 80 tests, Windows, macOS and Linux
+python -m unittest -v           # 81 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

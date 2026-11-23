@@ -4,7 +4,7 @@ The layout follows the index-skill pattern of Unity's agent plugin
 (skills/using-unity): one listed skill whose body indexes the others, which
 live inside its own folder where agents do not list them.
 
-<data>/routers/<pack>-pack/
+<data>/routers/using-<pack>/
   SKILL.md                         description + how to pick + A-to-Z index
   references/<skill>/<skill>.md    copy of the skill's SKILL.md, renamed so
                                    agents that scan for SKILL.md files
@@ -45,7 +45,12 @@ DEFAULT_MODELS = {"anthropic": "claude-haiku-5-5", "openai": "gpt-5-mini"}
 
 
 def name_for(pack: str) -> str:
-    """Skill name of a pack's router: web -> web-pack."""
+    """Skill name of a pack's router: web -> using-web (invoked as /using-web)."""
+    return f"using-{pack}"
+
+
+def legacy_name(pack: str) -> str:
+    """Router name before using-<pack>; such folders are removed on refresh."""
     return f"{pack}-pack"
 
 

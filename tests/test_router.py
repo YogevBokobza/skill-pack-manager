@@ -27,9 +27,9 @@ class Template(unittest.TestCase):
     def test_render_index(self):
         entries = [("zeta", "Does zeta"), ("alpha", "Does alpha.")]
         inst = router.render("web", "instead", "Index of the web pack.", entries)
-        self.assertIn("name: web-pack", inst)
+        self.assertIn("name: using-web", inst)
         self.assertIn("this index is the only way to reach them", inst)
-        self.assertIn("only `web-pack` appears in your list of skills", inst)
+        self.assertIn("only `using-web` appears in your list of skills", inst)
         self.assertIn("## Index (2 skills, A to Z)", inst)
         self.assertLess(inst.index("**alpha**"), inst.index("**zeta**"))  # A to Z
         self.assertIn("- **alpha**: Does alpha. File: `references/alpha/alpha.md`", inst)
@@ -37,7 +37,7 @@ class Template(unittest.TestCase):
         self.assertIn("`<SKILL_DIR>`", inst)
         along = router.render("web", "alongside", "Index of the web pack.", entries)
         self.assertIn("also listed on their own", along)
-        self.assertNotIn("only `web-pack` appears", along)
+        self.assertNotIn("only `using-web` appears", along)
 
     def test_ai_answer_is_validated(self):
         skills = [{"name": "a", "description": "does a"}]
@@ -77,20 +77,20 @@ class PackRouter(Env):
         self.assertFalse(self.rdir.exists())
         self.m.run("router_set", {"pack": "one", "mode": "instead"}, dry=False)
         for rel in SKILL_DIRS:
-            self.assertEqual(self.links(rel), ["one-pack"])
+            self.assertEqual(self.links(rel), ["using-one"])
         self.assertFalse((self.proj / HIDDEN_DIR).exists())
         # the skills live inside the router, reachable through the project's link
-        via = self.proj / ".claude/skills/one-pack/references"
+        via = self.proj / ".claude/skills/using-one/references"
         self.assertEqual((via / "alpha/alpha.md").read_text(), (self.store / "alpha/SKILL.md").read_text())
         self.assertEqual((via / "alpha/references/deep.md").read_text(), "content that must survive")
         self.assertTrue(is_link(self.rdir / "references/alpha/references"))
         # no SKILL.md below the router's own, so recursive scanners list one skill only
         self.assertEqual([p.relative_to(self.rdir).as_posix() for p in self.rdir.rglob("SKILL.md")], ["SKILL.md"])
-        text = (self.proj / ".claude/skills/one-pack/SKILL.md").read_text()
+        text = (self.proj / ".claude/skills/using-one/SKILL.md").read_text()
         self.assertIn("- **alpha**: alpha skill. File: `references/alpha/alpha.md`", text)
         v = self.m.folder_view(self.m.load(), str(self.proj))
         self.assertEqual({s["skill"]: s["status"] for s in v["skills"]},
-                         {"one-pack": "ok", "alpha": "routed", "beta": "routed"})
+                         {"using-one": "ok", "alpha": "routed", "beta": "routed"})
         self.assertTrue(v["in_sync"])
         status = subprocess.run(["git", "status", "--porcelain"], cwd=self.proj, capture_output=True, text=True)
         self.assertEqual(status.stdout.strip(), "")
@@ -107,7 +107,7 @@ class PackRouter(Env):
         self.m.run("router_set", {"pack": "one", "mode": "instead"}, dry=False)
         self.m.run("router_set", {"pack": "one", "mode": "alongside"}, dry=False)
         for rel in SKILL_DIRS:
-            self.assertEqual(self.links(rel), ["alpha", "beta", "one-pack"])
+            self.assertEqual(self.links(rel), ["alpha", "beta", "using-one"])
         self.assertIn("also listed on their own", self.m.routers.read("one"))
 
     def test_router_follows_pack_and_store(self):
@@ -138,6 +138,22 @@ class PackRouter(Env):
         self.assertEqual(meta["description"], "Index of my own words.")
         self.assertTrue(meta["stale"])
 
+    def test_router_is_named_using_pack_and_old_name_is_replaced(self):
+        # a router folder under the earlier name <pack>-pack, linked from the project
+        old = self.m.routers.root / "one-pack"
+        (old / "references").mkdir(parents=True)
+        (old / "SKILL.md").write_text("---\nname: one-pack\n---\n")
+        make_junction(self.store / "alpha", old / "references" / "alpha")
+        make_junction(old, self.proj / ".claude/skills/one-pack")
+        self.m.run("router_set", {"pack": "one"}, dry=False)
+        self.m.state()  # refresh removes the old folder (never through its links)
+        self.assertFalse(old.exists())
+        self.store_intact()
+        self.m.run("sync", {"folder": str(self.proj)}, dry=False)
+        for rel in SKILL_DIRS:
+            self.assertEqual(self.links(rel), ["using-one"])
+        self.assertIn("name: using-one", (self.proj / ".claude/skills/using-one/SKILL.md").read_text())
+
     def test_old_skill_packs_links_are_cleaned_up(self):
         (self.proj / HIDDEN_DIR).mkdir()
         make_junction(self.store / "alpha", self.proj / HIDDEN_DIR / "alpha")
@@ -146,8 +162,8 @@ class PackRouter(Env):
         self.store_intact()
 
     def test_name_collision_and_empty_pack(self):
-        (self.store / "one-pack").mkdir()
-        (self.store / "one-pack/SKILL.md").write_text("---\nname: one-pack\n---\n")
+        (self.store / "using-one").mkdir()
+        (self.store / "using-one/SKILL.md").write_text("---\nname: using-one\n---\n")
         with self.assertRaises(OpError):
             self.m.run("router_set", {"pack": "one"})
         self.m.run("create_pack", {"pack": "empty"}, dry=False)

@@ -500,7 +500,7 @@ function routerSection(p) {
     return h("div", { class: "card", style: "margin-top:16px" },
       h("div", { class: "row" }, h("div", { style: "flex:1" }, h("b", {}, "Router"),
         h("div", { class: "muted", style: "font-size:12px; margin-top:4px" },
-          `One skill, ${p.name}-pack, that stands in for the whole pack: agents see one description instead of ${p.skills.length}, and the router tells them which skill to read.`)),
+          `One skill, /using-${p.name}, that stands in for the whole pack: agents see one description instead of ${p.skills.length}, and the router tells them which skill to read.`)),
         h("button", { class: "btn primary", disabled: !p.skills.length, onclick: () => editRouter(p) }, "Create router…")));
   }
   const seg = h("div", { class: "seg" }, ...[["instead", "Instead of the skills"], ["alongside", "Alongside the skills"]].map(([k, l]) =>
@@ -557,7 +557,7 @@ async function editRouter(p) {
     } finally { genBtn.disabled = false; genBtn.textContent = "Write"; }
   }) }, "Write");
   const result = await openModal(`${r.enabled ? "Edit" : "Create"} router for ${p.name}`, [
-    h("p", { class: "muted" }, `The router is an index skill named ${p.name}-pack. Agents decide from its description whether to open it, so name the tasks and the words a user would type. Its index lists every skill A to Z with its description; it then tells the agent to read the one that fits and follow it.`),
+    h("p", { class: "muted" }, `The router is an index skill named using-${p.name} (invoked as /using-${p.name}). Agents decide from its description whether to open it, so name the tasks and the words a user would type. Its index lists every skill A to Z with its description; it then tells the agent to read the one that fits and follow it.`),
     h("label", { class: "field" }, "Mode", modeSel),
     h("div", { class: "row", style: "margin-bottom:10px" }, h("span", { class: "muted", style: "font-size:12px" }, "Write the text with:"), writerSel, genBtn,
       writersAvailable().length === 1 ? h("span", { class: "muted", style: "font-size:12px" }, "Add an API key or install the Claude/Codex CLI to write with AI (Settings).") : null),
@@ -571,7 +571,7 @@ async function editRouter(p) {
     const edited = snapshot(desc.value, routing) !== generated;
     return { pack: p.name, mode: modeSel.value, description: desc.value.trim(), routing, note: note.value, writer, edited };
   } }], true);
-  if (result && result.pack) await op("router_set", result, `Save router ${p.name}-pack`);
+  if (result && result.pack) await op("router_set", result, `Save router using-${p.name}`);
 }
 
 function aiSettings(ai) {
