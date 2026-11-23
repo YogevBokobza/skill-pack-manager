@@ -20,6 +20,7 @@ import time
 import uuid
 from pathlib import Path
 
+from . import scan
 from .osinfo import NO_WINDOW
 
 URL = re.compile(r"^(https?://[^\s]+|ssh://[^\s]+|git@[A-Za-z0-9.-]+:[^\s]+|file://[^\s]+)$")
@@ -154,6 +155,20 @@ def folder_size(p: Path) -> int:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
 
 
+def rmtree(p: Path) -> None:
+    """Remove a folder tree, read-only files included (git marks its pack
+    files read-only, and on Windows those refuse to be deleted)."""
+    import stat
+
+    def retry(func, path, _exc):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            pass
+    shutil.rmtree(p, onexc=retry)
+
+
 class Workspace:
     """Temp clones, keyed by an id handed to the UI between inspect and install."""
 
@@ -166,7 +181,7 @@ class Workspace:
             return
         for d in self.base.iterdir():
             if time.time() - d.stat().st_mtime > max_age:
-                shutil.rmtree(d, ignore_errors=True)
+                rmtree(d)
                 self.clones.pop(d.name, None)
 
     def clone(self, url: str, ref: str) -> dict:
@@ -186,7 +201,7 @@ class Workspace:
             rel = d.relative_to(dest).as_posix() or "."
             skills.append({"path": rel, "dir": d.name if rel != "." else url.rstrip("/").split("/")[-1].removesuffix(".git"),
                            "name": fm.get("name") or d.name, "description": fm.get("description", "")[:500],
-                           "preview": md[:6000], "bytes": folder_size(d)})
+                           "preview": md[:6000], "bytes": folder_size(d), "scan": scan.scan_folder(d)})
         info = {"id": cid, "url": url, "ref": ref, "kind": ref_kind(url, ref), "commit": commit, "skills": skills}
         self.clones[cid] = {**info, "path": dest}
         return info
@@ -200,7 +215,54 @@ class Workspace:
     def drop(self, cid: str) -> None:
         c = self.clones.pop(cid, None)
         if c:
-            shutil.rmtree(c["path"], ignore_errors=True)
+            rmtree(c["path"])
+
+
+def diff_folders(old: Path, new: Path, max_lines: int = 400, max_files: int = 200) -> list[dict]:
+    """Per file: added, removed or changed, with a unified diff for text files.
+    [{"path", "status", "diff": str | None, "binary": bool, "lines": [+n, -n]}]"""
+    import difflib
+
+    def files(root: Path) -> dict[str, Path]:
+        if not root.is_dir():
+            return {}
+        return {p.relative_to(root).as_posix(): p for p in root.rglob("*")
+                if p.is_file() and ".git" not in p.relative_to(root).parts}
+
+    def read(p: Path | None) -> str | None:
+        if p is None:
+            return ""
+        try:
+            raw = p.read_bytes()
+        except OSError:
+            return None
+        if len(raw) > 512 * 1024 or b"\0" in raw[:8192]:
+            return None
+        return raw.decode("utf8", errors="replace")
+
+    a, b = files(old), files(new)
+    out = []
+    for rel in sorted(set(a) | set(b)):
+        pa, pb = a.get(rel), b.get(rel)
+        if pa and pb:
+            try:
+                if pa.read_bytes() == pb.read_bytes():
+                    continue
+            except OSError:
+                pass
+        status = "added" if not pa else "removed" if not pb else "changed"
+        ta, tb = read(pa), read(pb)
+        if ta is None or tb is None:
+            out.append({"path": rel, "status": status, "diff": None, "binary": True, "lines": [0, 0]})
+        else:
+            lines = list(difflib.unified_diff(ta.splitlines(), tb.splitlines(), f"a/{rel}", f"b/{rel}", lineterm="", n=2))
+            plus = sum(1 for x in lines if x.startswith("+") and not x.startswith("+++"))
+            minus = sum(1 for x in lines if x.startswith("-") and not x.startswith("---"))
+            text = "\n".join(lines[:max_lines]) + (f"\n... {len(lines) - max_lines} more lines" if len(lines) > max_lines else "")
+            out.append({"path": rel, "status": status, "diff": text, "binary": False, "lines": [plus, minus]})
+        if len(out) >= max_files:
+            break
+    return out
 
 
 def copy_skill(src: Path, dst: Path) -> None:

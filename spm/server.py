@@ -94,7 +94,9 @@ class App:
         cfg = self.model.cfg
         return self.model.state() | {
             "usage": self.model.cached_usage(), "usage_job": self.usage_job,
+            "updates": self.cached_updates() if s["mode"] == "standalone" else {},
             "settings": {"mode": s["mode"], "theme": s["theme"], "scan_roots": [str(r) for r in cfg.scan_roots],
+                         "auto_update_check": s["auto_update_check"],
                          "scan_roots_custom": s["scan_roots"] is not None,
                          "ai": {"writer": (s.get("ai") or {}).get("writer", "template"),
                                 "models": (s.get("ai") or {}).get("models", {}),
@@ -200,10 +202,16 @@ class App:
             return {"ok": True}
         if path == "/api/skill/import":
             return {"log": [self.local().import_folder(b["folder"], bool(b.get("replace")))]}
+        if path == "/api/skill/update-preview":
+            return self.local().update_preview(self.ws, b["dir"], b.get("ref") or None)
         if path == "/api/skill/update":
-            return {"log": [self.local().update(self.ws, b["dir"], b.get("ref") or None)]}
+            return {"log": [self.local().update(self.ws, b["dir"], b.get("ref") or None, b.get("id") or None)]}
+        if path == "/api/skill/history":
+            return {"versions": self.local().history(b["dir"])}
+        if path == "/api/skill/rollback":
+            return {"log": [self.local().rollback(b["dir"], b["id"])]}
         if path == "/api/skill/updates":
-            return {"updates": self.local().check_updates()}
+            return {"updates": self.check_updates()}
         if path == "/api/skill/remove":
             return {"log": [self.local().remove_skill(b["dir"], m.load())]}
         if path == "/api/skill/global":
@@ -234,6 +242,21 @@ class App:
         if path == "/api/mcp/global":
             return {"log": [self.local().set_mcp_global(b["name"], b["client"], bool(b["on"]))]}
         raise OpError(f"unknown endpoint {path}")
+
+    def check_updates(self) -> dict:
+        """Check every installed skill and keep the result, so the Skills tab
+        shows it after a restart and the daily check knows when it last ran."""
+        u = self.local().check_updates()
+        f = self.data_dir / "updates.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"at": int(time.time()), "updates": u}), encoding="utf8")
+        return u
+
+    def cached_updates(self) -> dict:
+        try:
+            return json.loads((self.data_dir / "updates.json").read_text(encoding="utf8"))
+        except (OSError, ValueError):
+            return {}
 
     def _usage(self):
         try:

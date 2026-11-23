@@ -178,6 +178,8 @@ class LocalSource:
         log, now = [], int(time.time())
         for s in chosen:
             src = clone["path"] / s["path"] if s["path"] != "." else clone["path"]
+            if (self.store / s["dir"]).exists():
+                self._snapshot(s["dir"], c["skills"].get(s["dir"]))  # replacing: keep the old one
             repo.copy_skill(src, self.store / s["dir"])
             prev = c["skills"].get(s["dir"], {})
             c["skills"][s["dir"]] = {"source": {"url": clone["url"], "ref": clone["ref"], "kind": clone.get("kind"),
@@ -195,28 +197,74 @@ class LocalSource:
         d = src.name
         if (self.store / d).exists() and not replace:
             raise SourceError(f"{d!r} is already in the store")
-        repo.copy_skill(src, self.store / d)
         c = self._load()
+        if (self.store / d).exists():
+            self._snapshot(d, c["skills"].get(d))
+        repo.copy_skill(src, self.store / d)
         now = int(time.time())
         c["skills"][d] = {"source": {"local": str(src)}, "installed_at": now, "updated_at": now}
         self._save(c)
         return f"imported {d} from {src}"
 
-    def update(self, ws: repo.Workspace, d: str, ref: str | None = None) -> str:
-        c = self._load()
-        src = (c["skills"].get(d) or {}).get("source") or {}
+    # ------------------------------------------------- updates and history
+
+    KEEP_VERSIONS = 3
+
+    def _skill_source(self, d: str) -> dict:
+        src = (self._load()["skills"].get(d) or {}).get("source") or {}
         if not src.get("url"):
             raise SourceError(f"{d!r} was not installed from a repository")
+        return src
+
+    def _clone_folder(self, ws: repo.Workspace, clone: dict, path: str) -> Path:
+        if not any(s["path"] == path for s in clone["skills"]):
+            raise SourceError(f"{path} has no SKILL.md at {clone['ref']}")
+        base = ws.get(clone["id"])["path"]
+        return base if path == "." else base / path
+
+    def update_preview(self, ws: repo.Workspace, d: str, ref: str | None = None) -> dict:
+        """Download the new version and compare it with the installed one: a
+        diff per file, and scan findings the installed version did not have.
+        The download is kept under its id, so update(..., cid=id) installs
+        exactly what was shown."""
+        from . import scan
+        src = self._skill_source(d)
         ref = ref or src["ref"]
         clone = ws.clone(src["url"], ref)
         try:
-            match = next((s for s in clone["skills"] if s["path"] == src["path"]), None)
-            if not match:
-                raise SourceError(f"{src['path']} has no SKILL.md at {ref}")
-            base = ws.get(clone["id"])["path"]
-            folder = base if src["path"] == "." else base / src["path"]
-            if clone["commit"] == src.get("commit") and ref == src.get("ref"):
+            folder = self._clone_folder(ws, clone, src["path"])
+        except SourceError:
+            ws.drop(clone["id"])
+            raise
+        old_scan = scan.scan_folder(self.store / d)
+        new_scan = scan.scan_folder(folder)
+        same = clone["commit"] == src.get("commit") and ref == src.get("ref")
+        files = repo.diff_folders(self.store / d, folder)
+        return {"id": clone["id"], "dir": d, "url": src["url"], "path": src["path"],
+                "from": {"ref": src.get("ref"), "commit": src.get("commit")},
+                "to": {"ref": ref, "kind": clone.get("kind"), "commit": clone["commit"]},
+                "up_to_date": same and not files, "files": files, "scan": new_scan,
+                "new_findings": scan.new_findings(old_scan, new_scan)}
+
+    def update(self, ws: repo.Workspace, d: str, ref: str | None = None, cid: str | None = None) -> str:
+        """Install another version of d: from a download made by update_preview
+        (cid), or download ref now. The installed version is kept in the
+        history first."""
+        c = self._load()
+        src = self._skill_source(d)
+        if cid:
+            clone = ws.get(cid)
+            if clone["url"] != src["url"]:
+                raise SourceError("that download is from another repository")
+        else:
+            clone = ws.clone(src["url"], ref or src["ref"])
+        ref = clone["ref"]
+        try:
+            folder = self._clone_folder(ws, clone, src["path"])
+            if clone["commit"] == src.get("commit") and ref == src.get("ref") \
+                    and not repo.diff_folders(self.store / d, folder):
                 return f"{d} is up to date ({ref} {clone['commit'][:7]})"
+            self._snapshot(d, c["skills"][d])
             repo.copy_skill(folder, self.store / d)
         finally:
             ws.drop(clone["id"])
@@ -224,6 +272,67 @@ class LocalSource:
         c["skills"][d]["updated_at"] = int(time.time())
         self._save(c)
         return f"updated {d} to {ref} ({clone['commit'][:7]})"
+
+    def _snapshot(self, d: str, meta: dict | None) -> str | None:
+        """Copy the installed version of d into history/<d>/<id>/ and keep the
+        newest KEEP_VERSIONS. Returns the snapshot id."""
+        cur = self.store / d
+        if not (cur / "SKILL.md").is_file():
+            return None
+        src = (meta or {}).get("source") or {}
+        sid = time.strftime("%Y%m%d-%H%M%S") + "-" + ((src.get("commit") or "")[:7] or "local")
+        dest = self.root / "history" / d / sid
+        n = 1
+        while dest.exists():
+            dest = dest.with_name(f"{sid}-{n}")
+            n += 1
+        shutil.copytree(cur, dest / "files", symlinks=False)
+        (dest / "meta.json").write_text(json.dumps({"source": src, "saved_at": int(time.time()),
+                                                    "updated_at": (meta or {}).get("updated_at")}, indent=2),
+                                        encoding="utf8")
+        for old in sorted((self.root / "history" / d).iterdir())[:-self.KEEP_VERSIONS]:
+            shutil.rmtree(old, ignore_errors=True)
+        return dest.name
+
+    def history(self, d: str) -> list[dict]:
+        """Earlier versions of d, newest first."""
+        if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", d or "") or d in (".", ".."):
+            raise SourceError(f"unsupported skill folder name {d!r}")
+        h = self.root / "history" / d
+        out = []
+        for v in sorted(h.iterdir(), reverse=True) if h.is_dir() else []:
+            try:
+                meta = json.loads((v / "meta.json").read_text(encoding="utf8"))
+            except (OSError, ValueError):
+                continue
+            src = meta.get("source") or {}
+            out.append({"id": v.name, "saved_at": meta.get("saved_at"), "ref": src.get("ref"),
+                        "commit": src.get("commit"), "kind": src.get("kind"), "local": src.get("local")})
+        return out
+
+    def rollback(self, d: str, sid: str) -> str:
+        """Put an earlier version of d back. The current one goes into the
+        history, so a rollback can itself be undone."""
+        if not re.match(r"^[0-9]{8}-[0-9]{6}-[A-Za-z0-9-]{1,20}$", sid or ""):
+            raise SourceError("unknown version")
+        self.history(d)  # checks the name
+        snap = self.root / "history" / d / sid
+        if not (snap / "files" / "SKILL.md").is_file():
+            raise SourceError("that version is no longer kept")
+        meta = json.loads((snap / "meta.json").read_text(encoding="utf8"))
+        c = self._load()
+        if d not in c["skills"] or not (self.store / d).is_dir():
+            raise SourceError(f"skill not in the store: {d!r}")
+        self._snapshot(d, c["skills"][d])
+        repo.copy_skill(snap / "files", self.store / d)
+        shutil.rmtree(snap, ignore_errors=True)
+        src = meta.get("source") or {}
+        if src:
+            c["skills"][d]["source"] = src
+        c["skills"][d]["updated_at"] = int(time.time())
+        self._save(c)
+        label = f"{src.get('ref')} ({(src.get('commit') or '')[:7]})" if src.get("ref") else "the earlier version"
+        return f"restored {d} to {label}"
 
     def check_updates(self) -> dict[str, dict]:
         meta = self._load()["skills"]
@@ -260,6 +369,7 @@ class LocalSource:
         if os.path.islink(target) or os.path.isjunction(target) or not target.is_dir():
             raise SourceError("not a skill folder in the store")
         shutil.rmtree(target)
+        shutil.rmtree(self.root / "history" / d, ignore_errors=True)
         c = self._load()
         c["skills"].pop(d, None)
         self._save(c)
