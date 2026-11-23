@@ -54,6 +54,36 @@ def git(args: list[str], cwd: Path | None = None, timeout: int = 120) -> str:
     return r.stdout
 
 
+def web_url(url: str | None, ref: str | None = None, path: str | None = None) -> str | None:
+    """Browser link to a skill folder at a ref: GitHub and GitLab get a deep
+    link (tree/<ref>/<path>), other https hosts the repository page."""
+    if not url:
+        return None
+    u = url.strip().removesuffix("/").removesuffix(".git")
+    m = re.match(r"^(?:ssh://)?git@([^:/]+)[:/](.+)$", u)
+    if m:
+        u = f"https://{m.group(1)}/{m.group(2)}"
+    if not re.match(r"^https?://", u):
+        return None
+    host = re.sub(r"^https?://", "", u).split("/")[0].lower()
+    sub = "" if not path or path == "." else "/" + path.strip("/")
+    if ref and host in ("github.com", "www.github.com"):
+        return f"{u}/tree/{ref}{sub}"
+    if ref and host == "gitlab.com":
+        return f"{u}/-/tree/{ref}{sub}"
+    return u
+
+
+def ref_kind(url: str, ref: str) -> str:
+    """'tag' or 'branch' for a ref of a remote repository."""
+    try:
+        out = git(["ls-remote", "--tags", "--heads", check_url(url), ref], timeout=60)
+    except RepoError:
+        return "branch"
+    refs = [line.split("\t")[1] for line in out.splitlines() if "\t" in line]
+    return "tag" if any(r.startswith("refs/tags/") for r in refs) and f"refs/heads/{ref}" not in refs else "branch"
+
+
 def version_key(tag: str):
     """Sort key: version numbers first (v1.10 > v1.9), a final release above its
     pre-releases (v2.0.0 > v2.0.0-rc1), then text. Tags without numbers sort last."""
@@ -157,7 +187,7 @@ class Workspace:
             skills.append({"path": rel, "dir": d.name if rel != "." else url.rstrip("/").split("/")[-1].removesuffix(".git"),
                            "name": fm.get("name") or d.name, "description": fm.get("description", "")[:500],
                            "preview": md[:6000], "bytes": folder_size(d)})
-        info = {"id": cid, "url": url, "ref": ref, "commit": commit, "skills": skills}
+        info = {"id": cid, "url": url, "ref": ref, "kind": ref_kind(url, ref), "commit": commit, "skills": skills}
         self.clones[cid] = {**info, "path": dest}
         return info
 

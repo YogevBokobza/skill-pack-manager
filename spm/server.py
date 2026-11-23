@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 import traceback
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -140,6 +141,12 @@ class App:
             if not Path(b["path"]).exists():
                 raise OpError("path does not exist")
             open_path(b["path"])
+            return {"ok": True}
+        if path == "/api/open-url":
+            url = str(b.get("url", ""))
+            if not url.startswith(("https://", "http://")) or any(c in url for c in "\n\r\t \"'<>"):
+                raise OpError("only http(s) links can be opened")
+            webbrowser.open(url)  # the user's default browser, not the app window
             return {"ok": True}
         if path == "/api/migrate":
             return self.migrate(b)

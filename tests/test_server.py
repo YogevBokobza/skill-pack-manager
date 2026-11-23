@@ -89,6 +89,23 @@ class Server(Env):
         code, st = self.call("/api/state")
         self.assertEqual(st["settings"]["scan_roots"], [str(self.other)])
 
+    def test_open_url_only_http(self):
+        for bad in ("file:///etc/passwd", "javascript:alert(1)", "C:\\Windows\\system32\\calc.exe", "https://x y"):
+            self.assertEqual(self.call("/api/open-url", {"url": bad})[0], 400)
+
+    def test_ccswitch_skills_carry_source_and_link(self):
+        import sqlite3
+        con = sqlite3.connect(self.cfg.db)
+        con.execute("create table skills (id text, name text, description text, directory text, repo_owner text,"
+                    " repo_name text, repo_branch text, enabled_claude int)")
+        con.execute("insert into skills values ('acme/tools:skills/alpha','alpha','','alpha','acme','tools','main',1)")
+        con.commit()
+        con.close()
+        code, st = self.call("/api/state")
+        alpha = {s["dir"]: s for s in st["skills"]}["alpha"]
+        self.assertEqual((alpha["source"]["ref"], alpha["source"]["kind"]), ("main", "branch"))
+        self.assertEqual(alpha["web_url"], "https://github.com/acme/tools/tree/main/skills/alpha")
+
     def test_bad_theme_rejected(self):
         code, res = self.call("/api/settings", {"theme": "\"><script>"})
         self.assertEqual(code, 400)

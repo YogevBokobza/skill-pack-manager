@@ -85,6 +85,7 @@ td.desc { color: var(--muted); font-size: 12px; max-width: 520px; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+code.ver { font-size: 12px; background: var(--chip); padding: 1px 6px; border-radius: 4px; }
 .toggles { display: inline-flex; gap: 4px; }
 .tgl { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
 .tgl.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
@@ -610,14 +611,25 @@ function globalCell(item, kind) {
   }));
 }
 
+// open links in the user's browser, not in the app window
+const openUrl = url => guard(() => api("/api/open-url", { url }));
+function linkTo(url, text, title) {
+  return h("a", { href: url, title: title || url, onclick: e => { e.preventDefault(); openUrl(url); } }, text);
+}
+
 function sourceCell(s) {
   const src = s.source;
-  if (!src) return h("span", { class: "muted" }, "–");
+  if (!src) return h("span", { class: "muted", title: "Not installed from a repository" }, s.registered === false ? "unknown" : "local");
   if (src.local) return h("span", { class: "muted", title: src.local }, "local folder");
   const upd = (S.updates || {})[s.dir];
+  const kind = src.kind === "tag" ? "tag" : src.kind === "branch" ? "branch" : null;
   return h("div", {},
-    h("a", { href: src.url, target: "_blank", rel: "noreferrer", title: src.url }, shortUrl(src.url)),
-    h("div", { class: "muted", style: "font-size:11px" }, `${src.ref || ""}${src.commit ? " · " + src.commit.slice(0, 7) : ""}`),
+    linkTo(src.url, shortUrl(src.url)),
+    h("div", { class: "row", style: "gap:5px; margin-top:3px" },
+      h("code", { class: "ver", title: kind ? `${kind} ${src.ref}` : src.ref }, src.ref || "?"),
+      kind ? h("span", { class: "badge" + (kind === "tag" ? " b-info" : "") }, kind) : null,
+      src.commit ? h("span", { class: "muted", style: "font-size:11px", title: src.commit }, src.commit.slice(0, 7)) : null,
+      src.path && src.path !== "." ? h("span", { class: "muted", style: "font-size:11px" }, src.path) : null),
     upd && (upd.branch_moved || (upd.newer_tags || []).length)
       ? h("div", { class: "b-warn", style: "font-size:11px" }, upd.branch_moved ? "new commits" : `newer: ${upd.newer_tags[0]}`) : null,
     upd && upd.error ? h("div", { class: "b-bad", style: "font-size:11px" }, upd.error) : null);
@@ -632,7 +644,7 @@ function renderSkills() {
     h("button", { "aria-pressed": String(S.skillFilter === k), onclick: () => { S.skillFilter = k; render(); } }, `${l} (${st.skills.filter(F[k]).length})`)));
   const packSel = h("select", {}, h("option", { value: "" }, "Add to pack…"), ...st.packs.map(p => h("option", { value: p.name }, p.name)));
   const counted = !!usage._at;  // usage columns only after a count
-  const head = ["Skill", "Description", sa ? "Source" : null, "Global", "Packs", counted ? "Uses" : null, counted ? "Last used" : null, ""].filter(x => x !== null);
+  const head = ["Skill", "Description", "Source", "Global", "Packs", counted ? "Uses" : null, counted ? "Last used" : null, ""].filter(x => x !== null);
   fill($("detail"),
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, "Skills"),
       sa ? h("button", { class: "btn primary", onclick: installFromRepo }, "Install from repository") : null,
@@ -656,13 +668,15 @@ function renderSkills() {
         return h("tr", {},
           h("td", { style: "white-space:nowrap" }, s.dir, s.name !== s.dir ? h("div", { class: "muted", style: "font-size:11px" }, s.name) : null),
           h("td", { class: "desc" }, s.description.slice(0, 200)),
-          sa ? h("td", {}, sourceCell(s)) : null,
+          h("td", {}, sourceCell(s)),
           h("td", {}, globalCell(s, "skill")),
           h("td", {}, h("div", { class: "chips", style: "margin:0" }, ...s.packs.map(p => h("span", { class: "chip" }, p)),
             s.extra_folders ? h("span", { class: "chip" }, `extra ×${s.extra_folders}`) : null,
             s.registered ? null : h("span", { class: "chip b-warn", title: "No row in the cc-switch database" }, "not in cc-switch"))),
           counted ? h("td", {}, u ? u.uses : "0") : null, counted ? h("td", { style: "white-space:nowrap" }, u ? u.last : "") : null,
           h("td", {}, h("div", { class: "row", style: "flex-wrap:nowrap" }, sel,
+            s.web_url ? h("button", { class: "btn", title: s.web_url, onclick: () => openUrl(s.web_url) },
+              s.web_url.includes("github.com") ? "GitHub ↗" : s.web_url.includes("gitlab.com") ? "GitLab ↗" : "Source ↗") : null,
             sa && s.source && s.source.url ? h("button", { class: "btn", onclick: () => updateSkill(s) }, "Version…") : null,
             sa ? h("button", { class: "btn danger", title: "Remove from the store", onclick: () => removeSkill(s) }, "×") : null)));
       }))) : h("div", { class: "empty" }, sa && !st.skills.length ? "The store is empty. Install skills from a repository to start." : "No skills match"));

@@ -41,6 +41,11 @@ in which folder and for which agent. Nothing happens until you press Apply.
   the default branch or a release tag. Tags are sorted by version, newest first.
   You see every `SKILL.md` before installing, and the app records the source,
   ref and commit for updates.
+- **Where each skill came from.** The Skills tab shows every skill's
+  repository, the version in use (branch or release tag, with the commit when
+  known) and the folder inside the repository, plus a **GitHub ↗** button that
+  opens that exact folder at that version in your browser. In cc-switch mode
+  this comes from cc-switch's records.
 - **Updates.** One button checks every installed skill against its repository:
   new commits on its branch, or newer release tags.
 - **MCP catalog** (standalone mode). Add stdio or HTTP/SSE servers with a form,
@@ -297,7 +302,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 74 tests, Windows, macOS and Linux
+python -m unittest -v           # 78 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

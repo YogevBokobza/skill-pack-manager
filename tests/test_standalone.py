@@ -98,6 +98,21 @@ class Refs(RepoFixture):
         self.assertEqual(writer["description"], "writes v1 text")
         self.assertIn("v1 text", writer["preview"])
 
+    def test_web_url(self):
+        w = repo.web_url
+        self.assertEqual(w("https://github.com/o/r.git", "v1.2.0", "skills/x"), "https://github.com/o/r/tree/v1.2.0/skills/x")
+        self.assertEqual(w("git@github.com:o/r.git", "main", "."), "https://github.com/o/r/tree/main")
+        self.assertEqual(w("ssh://git@github.com/o/r", "main", None), "https://github.com/o/r/tree/main")
+        self.assertEqual(w("https://gitlab.com/g/r", "dev", "a"), "https://gitlab.com/g/r/-/tree/dev/a")
+        self.assertEqual(w("https://git.example.com/r.git", "main", "a"), "https://git.example.com/r")
+        self.assertIsNone(w("file:///tmp/r", "main", "a"))
+        self.assertIsNone(w(None))
+
+    def test_ref_kind_is_recorded(self):
+        info = self.ws.clone(self.url, "v1.0.0")
+        self.assertEqual(info["kind"], "tag")
+        self.assertEqual(self.ws.clone(self.url, "main")["kind"], "branch")
+
     def test_rejects_dangerous_urls_and_refs(self):
         for bad in ("ext::sh -c touch% /tmp/x", "-uhttps://x", "https://ok/x y", ""):
             with self.assertRaises(repo.RepoError):
@@ -110,7 +125,7 @@ class Install(RepoFixture):
     def test_install_update_and_check(self):
         self.install("v1.0.0")
         s = self.src.skills()["writer"]
-        self.assertEqual(s["source"]["ref"], "v1.0.0")
+        self.assertEqual((s["source"]["ref"], s["source"]["kind"]), ("v1.0.0", "tag"))
         self.assertIn("v1 text", (self.src.store / "writer/SKILL.md").read_text())
         self.assertTrue((self.src.store / "writer/references/style.md").exists())
         self.assertFalse((self.src.store / "writer/.git").exists())
@@ -119,6 +134,8 @@ class Install(RepoFixture):
         self.src.update(self.ws, "writer", "v2.0.0")
         self.assertIn("v2 text", (self.src.store / "writer/SKILL.md").read_text())
         self.assertEqual(self.src.skills()["writer"]["source"]["ref"], "v2.0.0")
+        self.src.update(self.ws, "writer", "main")
+        self.assertEqual(self.src.skills()["writer"]["source"]["kind"], "branch")
         self.assertIn("up to date", self.src.update(self.ws, "writer"))
 
     def test_update_keeps_the_folder_so_links_survive(self):

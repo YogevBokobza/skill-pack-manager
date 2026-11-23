@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import mcp, router, usage
+from . import mcp, repo, router, usage
 from .osinfo import APP_ROOT, HOME, NO_WINDOW, PROJECT_SKILL_DIRS as SKILL_DIRS, claude_cli, data_dir, default_scan_roots
 from .sources import CcSwitchSource
 
@@ -638,9 +638,11 @@ class Model:
                 extra_count[s] = extra_count.get(s, 0) + 1
         out = []
         for d, r in sorted(rows.items()):
+            src = r.get("source") or {}
             out.append({"dir": d, "name": r["name"], "description": (r.get("description") or "")[:400],
                         "core": bool(r.get("global")), "global": r.get("global", []),
                         "source": r.get("source"), "updated_at": r.get("updated_at"),
+                        "web_url": repo.web_url(src.get("url"), src.get("ref"), src.get("path")),
                         "packs": in_packs.get(d, []), "extra_folders": extra_count.get(d, 0),
                         "registered": r.get("registered", True)})
         return out

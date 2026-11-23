@@ -97,7 +97,8 @@ class Migrate(Fixture):
         self.assertEqual(st["mode"], "standalone")
         skills = {s["dir"]: s for s in st["skills"]}
         self.assertEqual(skills["alpha"]["source"], {"url": "https://github.com/acme/tools", "ref": "main",
-                                                     "path": "skills/alpha", "commit": None})
+                                                     "kind": "branch", "path": "skills/alpha", "commit": None})
+        self.assertEqual(skills["alpha"]["web_url"], "https://github.com/acme/tools/tree/main/skills/alpha")
         self.assertEqual(skills["beta"]["source"]["local"], str(self.cc_store / "beta"))
         self.assertEqual((self.local.store / "alpha/refs/a.md").read_text(), "keep me")
         self.assertEqual(self.local.mcp_catalog().config("pg")["env"], {"URL": SECRET})

@@ -29,7 +29,7 @@ from . import repo
 from .core import SKILL_DIRS, all_folders, classify, is_link, make_junction, norm, safe_unlink
 from .mcp import CLIENTS
 from .osinfo import process_running
-from .sources import CcSwitchSource, LocalSource, SourceError
+from .sources import CcSwitchSource, LocalSource, SourceError, ccswitch_source
 
 CCSWITCH_PROCESSES = ("cc-switch", "cc-switch.exe", "CC Switch")
 
@@ -42,13 +42,7 @@ def _ccswitch_rows(db: Path) -> tuple[dict, list[str]]:
         cols = [r[1] for r in con.execute("pragma table_info(skills)")]
         for r in (con.execute("select * from skills").fetchall() if cols else []):
             d = dict(zip(cols, r))
-            sid = d.get("id") or ""
-            if d.get("repo_owner") and ":" in sid:
-                path = sid.split(":", 1)[1] or "."
-                src = {"url": f"https://github.com/{d['repo_owner']}/{d['repo_name']}",
-                       "ref": d.get("repo_branch") or "main", "path": path, "commit": None}
-            else:
-                src = None
+            src = ccswitch_source(d)
             enabled = [c for c in CLIENTS if d.get(f"enabled_{c}")]
             others |= {k[8:] for k, v in d.items() if k.startswith("enabled_") and v and k[8:] not in CLIENTS}
             rows[d["directory"]] = {"source": src, "enabled": enabled}

@@ -37,6 +37,17 @@ def read_frontmatter(skill_dir: Path) -> dict:
         return {}
 
 
+def ccswitch_source(row: dict) -> dict | None:
+    """Source of a cc-switch skill row. Its id is "owner/repo:path/in/repo";
+    cc-switch installs from a branch (repo_branch)."""
+    if not row.get("repo_owner"):
+        return None
+    sid = row.get("id") or ""
+    path = sid.split(":", 1)[1] if ":" in sid else None
+    return {"url": f"https://github.com/{row['repo_owner']}/{row['repo_name']}",
+            "ref": row.get("repo_branch") or "main", "kind": "branch", "path": path or ".", "commit": None}
+
+
 class CcSwitchSource:
     mode = "cc-switch"
     editable = False
@@ -55,8 +66,7 @@ class CcSwitchSource:
                     glob = [c for c in mcp.CLIENTS if d.get(f"enabled_{c}")]
                     rows[d["directory"]] = {"name": d["name"], "description": d.get("description") or "",
                                             "global": glob, "registered": True,
-                                            "source": {"url": f"https://github.com/{d['repo_owner']}/{d['repo_name']}",
-                                                       "ref": d.get("repo_branch")} if d.get("repo_owner") else None}
+                                            "source": ccswitch_source(d)}
             finally:
                 con.close()
         out = {}
@@ -170,8 +180,8 @@ class LocalSource:
             src = clone["path"] / s["path"] if s["path"] != "." else clone["path"]
             repo.copy_skill(src, self.store / s["dir"])
             prev = c["skills"].get(s["dir"], {})
-            c["skills"][s["dir"]] = {"source": {"url": clone["url"], "ref": clone["ref"], "commit": clone["commit"],
-                                                "path": s["path"]},
+            c["skills"][s["dir"]] = {"source": {"url": clone["url"], "ref": clone["ref"], "kind": clone.get("kind"),
+                                                "commit": clone["commit"], "path": s["path"]},
                                      "installed_at": prev.get("installed_at", now), "updated_at": now}
             log.append(f"installed {s['dir']} from {clone['url']}@{clone['ref']} ({clone['commit'][:7]})")
         self._save(c)
@@ -210,7 +220,7 @@ class LocalSource:
             repo.copy_skill(folder, self.store / d)
         finally:
             ws.drop(clone["id"])
-        c["skills"][d]["source"].update(ref=ref, commit=clone["commit"])
+        c["skills"][d]["source"].update(ref=ref, kind=clone.get("kind"), commit=clone["commit"])
         c["skills"][d]["updated_at"] = int(time.time())
         self._save(c)
         return f"updated {d} to {ref} ({clone['commit'][:7]})"
