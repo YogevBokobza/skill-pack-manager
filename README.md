@@ -87,7 +87,7 @@ in which folder and for which agent. Nothing happens until you press Apply.
 ## Install and run
 
 ```sh
-git clone https://github.com/<you>/skill-pack-manager.git
+git clone https://github.com/YogevBokobza/skill-pack-manager.git
 cd skill-pack-manager
 python -m spm            # on Windows: py -3.12 -m spm
 ```
