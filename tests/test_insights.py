@@ -124,7 +124,8 @@ class Suggestions(Env):
         u = {"_at": 1, "_since": "2026-01-01",
              "alpha": {"uses": 3, "days": {"2026-05-20": 3},
                        "folders": [[str(self.proj / "sub"), 3, "2026-05-20"]]},
-             "beta": {"uses": 1, "days": {"2026-01-10": 1}, "folders": [[str(self.proj), 1, "2026-01-10"]]},
+             "beta": {"uses": 2, "days": {"2026-01-10": 1, "2026-05-25": 1},
+                      "folders": [[str(self.proj), 1, "2026-01-10"], [str(other), 1, "2026-05-25"]]},
              "gamma": {"uses": 2, "days": {"2026-05-30": 2}, "folders": [[str(self.proj), 2, "2026-05-30"]]}}
         got = {(s["kind"], s.get("skill")): s for s in insights.suggestions(m, m.load(), u, 60, today)}
         self.assertIn(("unused_global", "delta"), got)
@@ -136,6 +137,13 @@ class Suggestions(Env):
         self.assertNotIn(("unused_in_pack", "alpha"), got)
         self.assertIn(("unused_extra", "gamma"), got)  # used, but in proj, not in proj2
         self.assertNotIn(("unused_global", "alpha"), got)
+
+    def test_folders_without_recent_activity_are_not_judged(self):
+        m = self.model({})
+        m.run("attach", {"pack": "one", "folder": str(self.proj)}, dry=False)  # attached today, no sessions yet
+        m.run("extra_add", {"folder": str(self.proj), "skill": "gamma"}, dry=False)
+        u = {"_at": 1, "alpha": {"uses": 1, "days": {"2026-01-02": 1}, "folders": [[str(self.proj), 1, "2026-01-02"]]}}
+        self.assertEqual(insights.suggestions(m, m.load(), u, 60, date(2026, 6, 1)), [])
 
     def test_no_usage_ideas_before_a_count(self):
         m = self.model({"delta": ["claude"]})

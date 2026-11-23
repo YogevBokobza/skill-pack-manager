@@ -204,6 +204,13 @@ def suggestions(model, data: dict, usage: dict, days: int = 60, today: date | No
         return any(len(e) > 2 and e[2] != "?" and e[2] >= cutoff and _match_folder(e[0], [folder]) == folder
                    for e in u.get("folders") or [])
 
+    # folders where agents used any skill since the cutoff; elsewhere there is
+    # no evidence either way (a pack attached yesterday, a project left alone)
+    active = {norm(f) for f in folders
+              if any(len(e) > 2 and e[2] != "?" and e[2] >= cutoff and _match_folder(e[0], [f]) == f
+                     for k, u in usage.items() if not k.startswith("_") and isinstance(u, dict)
+                     for e in u.get("folders") or [])}
+
     def tok(d: str) -> int:
         return (reader.listing(model.store / d) or {}).get("tokens", 0)
 
@@ -240,7 +247,7 @@ def suggestions(model, data: dict, usage: dict, days: int = 60, today: date | No
                                 "hint": None if standalone else "Then turn it off in cc-switch."})
 
         for name, p in sorted(data["packs"].items()):
-            paths = [x for x in p["paths"] if Path(x).is_dir()]
+            paths = [x for x in p["paths"] if Path(x).is_dir() and norm(x) in active]
             if not paths:
                 continue
             for d in p["skills"]:
@@ -254,7 +261,7 @@ def suggestions(model, data: dict, usage: dict, days: int = 60, today: date | No
                             "action": {"op": "pack_remove_skill", "args": {"pack": name, "skill": d}}})
 
         for f in folders:
-            if not Path(f).is_dir():
+            if not Path(f).is_dir() or norm(f) not in active:
                 continue
             for d in extras_of(data, f):
                 if not recent(d, f):
