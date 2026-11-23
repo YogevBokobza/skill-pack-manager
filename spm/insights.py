@@ -24,6 +24,7 @@ import re
 from datetime import date, timedelta
 from pathlib import Path
 
+from .packset import folders_using
 from .repo import frontmatter
 
 AGENTS = ("claude", "opencode", "codex", "gemini")
@@ -113,9 +114,10 @@ def pack_cost(reader: Reader, store: Path, skills: list[str]) -> int:
 
 def router_savings(model, data: dict, reader: Reader, folder) -> list[dict]:
     """Per pack of the folder: tokens its router saves, or would save."""
-    from .core import packs_of, router_name, router_of
+    from .core import router_name, router_of
+    from .packset import active
     out = []
-    for name in packs_of(data, folder):
+    for name in active(data, folder):
         p = data["packs"][name]
         r = router_of(p)
         full = pack_cost(reader, model.store, p["skills"])
@@ -252,7 +254,7 @@ def suggestions(model, data: dict, usage: dict, days: int = 60, today: date | No
                                 "hint": None if standalone else "Then turn it off in cc-switch."})
 
         for name, p in sorted(data["packs"].items()):
-            paths = [x for x in p["paths"] if Path(x).is_dir() and norm(x) in active]
+            paths = [x for x in folders_using(data, name) if Path(x).is_dir() and norm(x) in active]
             if not paths:
                 continue
             for d in p["skills"]:
@@ -275,13 +277,14 @@ def suggestions(model, data: dict, usage: dict, days: int = 60, today: date | No
                                 "action": {"op": "extra_remove", "args": {"folder": f, "skill": d}}})
 
     for name, p in sorted(data["packs"].items()):
-        if router_of(p) or len(p["skills"]) < 3 or not p["paths"]:
+        users = folders_using(data, name)
+        if router_of(p) or len(p["skills"]) < 3 or not users:
             continue
         saved = pack_cost(reader, model.store, p["skills"]) - _router_estimate(name, len(p["skills"]))
         if saved > 50:
             out.append({"kind": "create_router", "pack": name, "tokens": saved,
-                        "text": f"Pack {name} lists {len(p['skills'])} skills in {len(p['paths'])} "
-                                f"folder{'s' if len(p['paths']) != 1 else ''}. A router would list one.",
+                        "text": f"Pack {name} lists {len(p['skills'])} skills in {len(users)} "
+                                f"folder{'s' if len(users) != 1 else ''}. A router would list one.",
                         "action": {"router": name}})
     return sorted(out, key=lambda s: -s["tokens"])
 

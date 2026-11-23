@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import mcp, migrate, repo, router
+from . import mcp, migrate, repo, router, share
 from .core import Config, Model, OpError, UnsafeRemoval
 from .mcp import McpError
 from .osinfo import WINDOWS, MACOS, data_dir, open_path
@@ -27,7 +27,7 @@ from .sources import CcSwitchSource, LocalSource, SourceError
 
 STATIC = Path(__file__).with_name("static")
 USER_ERRORS = (OpError, UnsafeRemoval, McpError, SourceError, repo.RepoError, router.RouterError, ValueError, KeyError,
-               FileNotFoundError)
+               FileNotFoundError, share.ShareError)
 
 
 class App:
@@ -183,6 +183,24 @@ class App:
                 raise OpError("unknown key")
             self.secrets.set(b["name"], (b.get("value") or "").strip() or None)
             return {"ok": True}
+        # ---- sharing: pack files and .skillpacks.json
+        if path == "/api/share/export":
+            data = m.load()
+            return share.export(m, data, b["packs"], b.get("attach"))
+        if path == "/api/share/preview":
+            b2 = self.bundle(b)
+            return share.preview(m, m.load(), b2, bool(b.get("replace"))) | {"bundle": b2}
+        if path == "/api/share/add-mcp":
+            return {"log": self.add_shared_mcp(self.bundle(b))}
+        if path == "/api/share/write-manifest":
+            folder = Path(b["folder"])
+            if not folder.is_dir():
+                raise OpError("folder does not exist")
+            if (folder / share.MANIFEST).exists() and not b.get("overwrite"):
+                raise OpError(f"{share.MANIFEST} already exists in that folder")
+            text = json.dumps(share.export(m, m.load(), b["packs"], b["packs"]), indent=2, ensure_ascii=False) + "\n"
+            (folder / share.MANIFEST).write_text(text, encoding="utf8")
+            return {"log": [f"wrote {folder / share.MANIFEST}"]}
         if path == "/api/usage":
             if not self.usage_job["running"]:
                 self.usage_job.update(running=True, error=None)
@@ -249,6 +267,31 @@ class App:
         if path == "/api/mcp/global":
             return {"log": [self.local().set_mcp_global(b["name"], b["client"], bool(b["on"]))]}
         raise OpError(f"unknown endpoint {path}")
+
+    def bundle(self, b: dict) -> dict:
+        """A pack file from the request: its text, or the manifest of a folder."""
+        if b.get("folder") and not b.get("text") and not b.get("bundle"):
+            m = share.read_manifest(b["folder"])
+            if m is None:
+                raise OpError("that folder has no .skillpacks.json")
+            if "error" in m:
+                raise share.ShareError(m["error"])
+            return m
+        return share.parse(b.get("bundle") or b.get("text") or "")
+
+    def add_shared_mcp(self, bundle: dict) -> list[str]:
+        """Standalone: add the file's MCP servers that the catalog lacks. Secret
+        values come in empty; the MCP tab asks for them."""
+        if not isinstance(self.model.source, LocalSource):
+            return []
+        src, log = self.model.source, []
+        have = src.mcp_catalog()
+        wanted = {m for p in bundle["packs"].values() for m in p["mcp"]}
+        for n in sorted(wanted):
+            if n in have or n not in bundle["mcp"]:
+                continue
+            log.append(src.save_mcp(n, bundle["mcp"][n], "added from a pack file"))
+        return log
 
     def check_updates(self) -> dict:
         """Check every installed skill and keep the result, so the Skills tab

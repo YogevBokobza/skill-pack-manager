@@ -434,15 +434,18 @@ function renderFolderDetail() {
   fill(d, 
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, f),
       h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: f })) }, "Open folder"),
+      v.packs.length ? h("button", { class: "btn", title: "Write .skillpacks.json so people who clone this repository get the same packs", onclick: () => writeManifest(v) }, "Share in repo…") : null,
       v.in_sync ? null : h("button", { class: "btn primary", onclick: () => op("sync", { folder: f }, "Sync folder") }, "Sync")),
     v.cost && v.cost.claude ? h("div", { class: "costline", title: "Estimated tokens of skill names and descriptions each agent lists in every session here, global skills included" },
       "Skill listings per session: ", agents().map(a => `${CLIENT_LABEL[a]} ≈ ${num(v.cost[a].tokens)} tokens (${plural(v.cost[a].count, "skill")})`).join(" · "),
       " · ", h("a", { href: "#", onclick: e => { e.preventDefault(); S.tab = "usage"; render(); loadInsights(); } }, "details")) : null,
     v.exists ? null : h("p", { class: "b-bad" }, "This folder does not exist any more. Detach its packs to clean up packs.json."),
     S.newFolder === f ? h("p", { class: "muted" }, "New folder: attach a pack or add a skill to start managing it.") : null,
+    manifestCard(v),
     h("h3", {}, "Packs"),
     h("div", { class: "chips" }, ...v.packs.map(p => h("span", { class: "chip" }, p,
       h("button", { title: "Detach", onclick: () => op("detach", { pack: p, folder: f }, `Detach ${p}`) }, "×"))),
+      ...(v.via || []).map(p => h("span", { class: "chip", title: "Included by an attached pack" }, `${p} (included)`)),
       v.packs.length ? null : h("span", { class: "muted" }, "none")),
     nopts ? h("div", { class: "row", style: "margin-top:10px" }, sel,
       h("button", { class: "btn", onclick: () => op("attach", { pack: sel.value, folder: f }, `Attach ${sel.value}`) }, "Attach pack")) : null,
@@ -475,17 +478,21 @@ function renderPacks() {
   const nameInp = h("input", { placeholder: "new-pack", style: "width:120px" });
   fill($("list"), 
     listTools("Filter packs or skills", h("span", { class: "row" }, nameInp,
-      h("button", { class: "btn primary", onclick: () => { const n = nameInp.value.trim(); if (n) { S.pack = n; op("create_pack", { pack: n }, `Create ${n}`); } } }, "Create"))),
+      h("button", { class: "btn primary", onclick: () => { const n = nameInp.value.trim(); if (n) { S.pack = n; op("create_pack", { pack: n }, `Create ${n}`); } } }, "Create"),
+      h("button", { class: "btn", title: "Import packs from a pack file", onclick: importPackFile }, "Import…"))),
     ...items.map(p => h("div", { class: "item" + (S.pack === p.name ? " sel" : ""), role: "button", tabindex: "0", "aria-label": p.name, onclick: () => { S.pack = p.name; render(); }, onkeydown: e => { if (e.key === "Enter") { S.pack = p.name; render(); } } },
-      h("div", { class: "t" }, p.name, p.mcp.length ? h("span", { class: "badge" }, "MCP") : null),
+      h("div", { class: "t" }, p.name, p.mcp.length ? h("span", { class: "badge" }, "MCP") : null,
+        p.includes.length ? h("span", { class: "badge", title: `includes ${p.includes.join(", ")}` }, `+${p.includes.length}`) : null),
       h("div", { class: "p" }, `${plural(p.skills.length, "skill")}${p.mcp.length ? ` · ${p.mcp.length} MCP` : ""} · ${plural(p.paths.length, "folder")}`))));
   const d = $("detail"), p = S.state.packs.find(x => x.name === S.pack);
   if (!p) return fill(d, h("h2", {}, "Packs"), h("p", { class: "muted" }, "A pack is a named set of skills (and MCP servers) that you attach to project folders. Pick a pack on the left, or create one."));
   const desc = Object.fromEntries(S.state.skills.map(s => [s.dir, s.description]));
   fill(d, 
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, p.name),
+      h("button", { class: "btn", onclick: () => exportPacks([p.name]) }, "Export…"),
       h("button", { class: "btn danger", onclick: () => op("delete_pack", { pack: p.name }, `Delete pack ${p.name}`).then(() => { if (!S.state.packs.some(x => x.name === p.name)) { S.pack = null; render(); } }) }, "Delete pack")),
     routerSection(p),
+    includesSection(p),
     h("h3", {}, `Folders (${p.paths.length})`),
     ...p.paths.map(f => h("div", { class: "row", style: "margin-bottom:6px" },
       h("span", { style: "flex:1; word-break:break-all" }, f),
@@ -506,6 +513,125 @@ function renderPacks() {
     h("table", { style: "margin-top:10px" }, h("tbody", {}, ...p.skills.map(s => h("tr", {},
       h("td", { style: "white-space:nowrap" }, s), h("td", { class: "desc" }, (desc[s] || "not in store").slice(0, 180)),
       h("td", {}, h("button", { class: "btn danger", onclick: () => op("pack_remove_skill", { pack: p.name, skill: s }, `Remove ${s} from ${p.name}`) }, "Remove")))))));
+}
+
+// Sharing ---------------------------------------------------------------
+function includesSection(p) {
+  const others = S.state.packs.map(x => x.name).filter(n => n !== p.name && !p.includes.includes(n));
+  const sel = h("select", {}, ...others.map(n => h("option", { value: n }, n)));
+  return h("div", {},
+    h("h3", {}, `Includes (${p.includes.length})`),
+    h("p", { class: "muted", style: "font-size:12px; margin-top:0" }, "A folder that gets this pack also gets the packs it includes."),
+    h("div", { class: "chips" }, ...p.includes.map(n => h("span", { class: "chip" }, n,
+      h("button", { title: "Stop including", onclick: () => op("pack_exclude", { pack: p.name, include: n }, `${p.name} stops including ${n}`) }, "×"))),
+      p.includes.length ? null : h("span", { class: "muted" }, "none"),
+      p.included_by.length ? h("span", { class: "muted", style: "font-size:12px; margin-left:8px" }, `included by ${p.included_by.join(", ")}`) : null),
+    others.length ? h("div", { class: "row", style: "margin-top:10px" }, sel,
+      h("button", { class: "btn", onclick: () => op("pack_include", { pack: p.name, include: sel.value }, `${p.name} includes ${sel.value}`) }, "Include pack")) : null);
+}
+
+function download(name, text) {
+  const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "application/json" })), download: name });
+  document.body.append(a); a.click(); a.remove();
+}
+async function exportPacks(names) {
+  await guard(async () => {
+    const b = await api("/api/share/export", { packs: names });
+    const text = JSON.stringify(b, null, 2) + "\n";
+    const ta = h("textarea", { rows: 14, style: "width:100%; font-family: ui-monospace, monospace; font-size:12px", readonly: true });
+    ta.value = text;
+    const secrets = Object.values(b.mcp).some(c => Object.keys(c.env || {}).length || Object.keys(c.headers || {}).length);
+    await openModal(`Export ${names.join(", ")}`, [
+      h("p", { class: "muted" }, `${plural(Object.keys(b.packs).length, "pack")} (included packs too), ${plural(Object.keys(b.skills).length, "skill")} with where they come from, ${plural(Object.keys(b.mcp).length, "MCP server")}. `,
+        secrets ? "Secret values are left empty; whoever imports the file fills them in." : ""), ta,
+    ], [{ label: "Close" },
+        { label: "Copy", run: async () => { await navigator.clipboard.writeText(text); toast("Copied"); return false; } },
+        { label: "Download", primary: true, run: async () => { download(`${names.join("+")}.skillpack.json`, text); return true; } }], true);
+  });
+}
+
+async function importPackFile() {
+  const ta = h("textarea", { rows: 10, style: "width:100%; font-family: ui-monospace, monospace; font-size:12px", placeholder: "paste a pack file here, or choose one" });
+  const file = h("input", { type: "file", accept: ".json,application/json" });
+  file.addEventListener("change", async () => { if (file.files[0]) ta.value = await file.files[0].text(); });
+  S.sharePreview = null;
+  const ok = await openModal("Import packs", [
+    h("p", { class: "muted" }, "A pack file comes from Export in someone's Packs tab. Next you see what it adds; nothing is installed without your OK."),
+    file, h("div", { style: "margin-top:8px" }, ta),
+  ], [{ label: "Cancel" }, { label: "Preview", primary: true, run: async () => (S.sharePreview = await api("/api/share/preview", { text: ta.value })) }], true);
+  if (ok && S.sharePreview) await importFlow(S.sharePreview, null);
+}
+
+const SKILL_ST = { in_store: ["in the store", "b-ok"], in_store_other_source: ["in the store, from another source", "b-warn"],
+                   installable: ["offered for install next", "b-info"], missing: ["not available", "b-bad"] };
+const MCP_ST = { in_catalog: ["in the catalog", "b-ok"], add: ["added; fill in secrets in MCP servers", "b-info"], missing: ["not available", "b-bad"] };
+const PACK_ST = { new: ["new", "b-ok"], same: ["already the same", "muted"], differs: ["exists with other content: kept", "b-warn"], replace: ["will be replaced", "b-warn"] };
+async function importFlow(pv, folder) {
+  const replace = h("input", { type: "checkbox" });
+  const ok = await openModal(folder ? "Packs this repository asks for" : "Import packs", [
+    folder ? h("p", { class: "muted" }, "From ", h("code", {}, ".skillpacks.json"), ` in ${folder}. Review it like any download: the file is part of the repository, and whoever wrote it chose these skills.`) : null,
+    ...pv.warnings.map(w => h("p", { class: "b-warn" }, w)),
+    h("h3", {}, "Packs"),
+    h("table", {}, h("tbody", {}, ...pv.packs.map(p => h("tr", {},
+      h("td", {}, h("b", {}, p.name), pv.attach.includes(p.name) && folder ? h("span", { class: "badge b-info", style: "margin-left:6px" }, "attach here") : null),
+      h("td", { class: "desc" }, `${plural(p.skills.length, "skill")}${p.mcp.length ? `, ${p.mcp.length} MCP` : ""}${p.includes.length ? `, includes ${p.includes.join(", ")}` : ""}`),
+      h("td", {}, h("span", { class: PACK_ST[p.status][1] }, PACK_ST[p.status][0])))))),
+    pv.packs.some(p => p.status === "differs") ? h("label", { class: "row", style: "margin-top:6px" }, replace, "Replace those packs' skills and MCP servers with the file's (their folders stay)") : null,
+    h("h3", {}, "Skills"),
+    h("table", {}, h("tbody", {}, ...pv.skills.map(s => h("tr", {},
+      h("td", { style: "white-space:nowrap" }, s.dir),
+      h("td", { class: "desc" }, s.source && s.source.url ? `${shortUrl(s.source.url)} @ ${s.source.ref}${s.source.path && s.source.path !== "." ? ` · ${s.source.path}` : ""}` : "no source given"),
+      h("td", {}, h("span", { class: SKILL_ST[s.status][1] }, SKILL_ST[s.status][0])))))),
+    pv.mcp.length ? h("div", {}, h("h3", {}, "MCP servers"),
+      h("table", {}, h("tbody", {}, ...pv.mcp.map(m => h("tr", {},
+        h("td", {}, m.name), h("td", { class: "desc" }, m.url || [m.command, ...(m.args || [])].join(" ")),
+        h("td", { class: "muted", style: "font-size:12px" }, [...(m.env_keys || []), ...(m.header_keys || [])].join(", ")),
+        h("td", {}, h("span", { class: MCP_ST[m.status][1] }, MCP_ST[m.status][0]))))))) : null,
+  ], [{ label: "Cancel" }, { label: folder ? "Add and attach" : "Add packs", primary: true, value: true }], true);
+  if (!ok) return;
+  await guard(async () => {
+    const added = await api("/api/share/add-mcp", { bundle: pv.bundle });
+    if (added.log.length) toast(added.log.join("; "));
+    const done = await op("import_packs", { bundle: pv.bundle, replace: replace.checked, folder }, folder ? "Attach the repository's packs" : "Import packs");
+    if (done && pv.repos.length) await installShared(pv.repos);
+  });
+}
+async function installShared(repos) {
+  for (const r of repos) {
+    S.inspect = null;
+    const go = await openModal(`Install from ${shortUrl(r.url)} @ ${r.ref}?`, [
+      h("p", {}, `The imported packs need ${plural(r.dirs.length, "skill")} from this repository: ${r.dirs.join(", ")}.`),
+      h("p", { class: "muted" }, "Next you see each SKILL.md and the safety check, as with any install."),
+    ], [{ label: "Skip" }, { label: "Download", primary: true, busy: "Downloading…", run: async () => (S.inspect = await api("/api/repo/inspect", { url: r.url, ref: r.ref })) }]);
+    if (go && S.inspect) await chooseSkills(S.inspect, r.paths);
+  }
+  await refresh();
+}
+
+function manifestCard(v) {
+  const m = v.manifest;
+  if (!m) return null;
+  if (m.error) return h("p", { class: "b-warn" }, `.skillpacks.json in this folder cannot be read: ${m.error}`);
+  if (m.done) return h("p", { class: "muted", style: "font-size:12px" }, "Matches the repository's .skillpacks.json.");
+  return h("div", { class: "card", style: "margin-top:14px; border-color: var(--info)" },
+    h("div", { class: "row" }, h("div", { style: "flex:1" },
+      h("b", {}, "This repository suggests packs"),
+      h("div", { class: "muted", style: "font-size:12px; margin-top:4px" },
+        `Its .skillpacks.json asks for ${m.attach.join(", ") || "no packs"}${m.undefined.length ? `; new here: ${m.undefined.join(", ")}` : ""}. Nothing changes until you review it.`)),
+      h("button", { class: "btn primary", onclick: () => guard(async () => importFlow(await api("/api/share/preview", { folder: v.folder }), v.folder)) }, "Review…")));
+}
+async function writeManifest(v) {
+  await guard(async () => {
+    const b = await api("/api/share/export", { packs: v.packs, attach: v.packs });
+    const ok = await openModal("Share these packs in the repository", [
+      h("p", {}, "Writes ", h("code", {}, ".skillpacks.json"), " in this folder. Commit it, and whoever clones the repository and opens it in Skill Pack Manager is offered the same packs, after a review."),
+      h("p", { class: "muted" }, "Secret values are left empty. Skills installed from a local folder have no source, so others can't install them."),
+      v.manifest ? h("p", { class: "b-warn" }, "The folder already has a .skillpacks.json; this replaces it.") : null,
+      h("pre", { class: "preview" }, JSON.stringify(b, null, 2)),
+    ], [{ label: "Cancel" }, { label: v.manifest ? "Replace file" : "Write file", primary: true, run: async () => {
+      const r = await api("/api/share/write-manifest", { folder: v.folder, packs: v.packs, overwrite: !!v.manifest }); toast(r.log.join("; ")); } }], true);
+    if (ok) await refresh();
+  });
 }
 
 // Routers ---------------------------------------------------------------
@@ -979,11 +1105,11 @@ function findingList(findings, open) {
 }
 const SCAN_NOTE = "These checks flag patterns such as piping a download into a shell, reading credentials or hidden text. They do not prove a skill safe or unsafe; read what they point at.";
 
-async function chooseSkills(c) {
+async function chooseSkills(c, preselect) {
   if (!c.skills.length) { await api("/api/repo/cancel", { id: c.id }); return toast("No SKILL.md found in that version", true); }
   const checks = [];
   const list = h("div", {}, ...c.skills.map(s => {
-    const cb = h("input", { type: "checkbox", checked: !s.in_store || s.same_source });
+    const cb = h("input", { type: "checkbox", checked: preselect ? preselect.includes(s.path) : (!s.in_store || s.same_source) });
     checks.push([cb, s]);
     return h("div", { class: "skillpick" },
       h("label", { class: "row" }, cb, h("b", {}, s.dir), h("span", { class: "muted" }, s.path),
@@ -1344,6 +1470,7 @@ function renderScan() {
             p.subdir ? h("div", { class: "muted", style: "font-size:11px" }, `${p.kind} project in ${p.subdir}${S.state.platform === "windows" ? "\\" : "/"}, linked at the repo root`) : null),
           h("td", {}, h("div", { class: "chips", style: "margin:0" }, ...tags.map(t => h("span", { class: "chip" }, t)),
             p.worktree ? h("span", { class: "chip", title: "git worktree of another checkout" }, "worktree") : null,
+            p.manifest ? h("span", { class: "chip b-info", title: "The repository has a .skillpacks.json; open the folder to review it" }, ".skillpacks.json") : null,
             p.has_links && !p.packs.length ? h("span", { class: "chip b-warn", title: "Has linked skills but no pack in packs.json" }, "untracked links") : null)),
           h("td", {}, p.packs.join(", ") || h("span", { class: "b-warn" }, "none")),
           h("td", { style: "font-size:12px" }, sug.length ? sug.map(s => h("div", {}, h("b", {}, s.pack), h("span", { class: "muted" }, ` · ${s.why}`))) : h("span", { class: "muted" }, "–")),
