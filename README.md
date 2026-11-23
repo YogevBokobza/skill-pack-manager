@@ -46,6 +46,9 @@ in which folder and for which agent. Nothing happens until you press Apply.
   router's index tells them which skill to read (the index-skill pattern of
   Unity's agent plugin). Written from a template,
   or by AI through your Claude Code or Codex subscription or an API key.
+  **Test…** checks the router: the AI plays an agent that sees only the
+  router's description, then its index, and the app reports for which
+  requests it opened the router and which skill it picked.
 - **Status per folder.** Each skill and MCP server shows whether it is in place
   for every agent, missing, conflicting with a project file, or left over. One
   click syncs a folder that drifted.
@@ -155,6 +158,8 @@ python -m spm import web.skillpack.json  # preview, then add the packs
 python -m spm manifest                   # the current folder's .skillpacks.json
 python -m spm manifest --write web       # create it; commit it to share
 python -m spm manifest --apply           # add and attach what it asks for
+python -m spm router-test web --write-cases   # AI writes test requests, then judges the router
+python -m spm router-test web            # run the saved requests again (exit 3 if any miss)
 python -m spm tokens                     # estimated context cost per folder and agent
 python -m spm usage --count              # read the session logs, then list skill use
 python -m spm suggest --days 90          # cleanup suggestions, each with the command that does it
@@ -320,6 +325,27 @@ Each pack chooses a mode:
 Adding or removing a skill in the pack updates the router. A description written
 by the template is regenerated; one you edited or had written by AI is kept, and
 the pack view marks it out of date so you can rewrite it.
+
+**Testing a router.** In a pack with a router, click **Test…**. Each line is
+a request and the skill that should handle it (`frontend-design: make the hero
+less generic`), or `none` for a request the pack should stay out of.
+**Write requests with AI** drafts them from the skills' descriptions. **Run
+test** sends one prompt to the AI writer: it sees the router's name and
+description (all an agent sees before opening a skill), decides for each
+request whether to open it, then picks one skill from the index. The result
+shows:
+
+- *opened when it should*: requests that reached the router. A miss means the
+  description lacks the words those requests use.
+- *right skill once open*: a miss names the two skills whose index lines read
+  alike.
+- *stayed out of off-topic*: the router should not open for `none` requests.
+
+The requests and the result are saved per pack (`<data folder>/router-tests`),
+so you can edit the description and run the same test again. It measures the
+text, not one agent: a real agent also sees its other skills and the
+conversation. Each run costs one AI call on your subscription or API key, and
+nothing runs until you click.
 
 **AI writers** (Settings → *Writing pack routers*): Claude Code CLI or Codex CLI
 use your subscription (they run with no tools, in an empty folder); Anthropic

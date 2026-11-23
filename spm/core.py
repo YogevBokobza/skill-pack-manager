@@ -685,9 +685,16 @@ class Model:
         meta["routing"] = {n: router.one_line(v) for n, v in (meta.get("routing") or {}).items()
                            if n in descs and router.one_line(v) and router.one_line(v) != descs[n]}
         changed = self.routers.sync_refs(pack, names, self.store)
-        entries = [(n, meta["routing"].get(n) or descs[n] or n) for n in names]
+        entries = [(n, meta["routing"].get(n) or descs[n] or n) for n in names]  # same as router_index
         text = router.render(pack, mode, meta["description"], entries, meta.get("note", ""))
         return self.routers.save(pack, text, {**meta, "pack": pack, "mode": mode}) or changed
+
+    def router_index(self, data: dict, pack: str) -> list[tuple[str, str]]:
+        """(skill, index line) pairs as the router's index shows them."""
+        meta = self.routers.meta(pack)
+        routing = meta.get("routing") or {}
+        return [(s["name"], routing.get(s["name"]) or router.one_line(s["description"]) or s["name"])
+                for s in self.router_skills(data, pack)]
 
     def refresh_routers(self, data: dict) -> None:
         """Keep routers in step with skills updated in the store (their
@@ -710,7 +717,17 @@ class Model:
                 "description": meta.get("description", ""), "routing": meta.get("routing", {}),
                 "descriptions": {s["name"]: router.one_line(s["description"])
                                  for s in self.router_skills(data, pack)} if r else {},
-                "note": meta.get("note", ""), "name": router_name(pack)}
+                "note": meta.get("note", ""), "name": router_name(pack),
+                "test": self.router_test_summary(pack)}
+
+    def router_test_summary(self, pack: str) -> dict | None:
+        from . import evaluate
+        r = (evaluate.Store(self.cfg.data_dir / "router-tests").load(pack) or {}).get("result")
+        if not r:
+            return None
+        s = r["summary"]
+        return {"ok": s["ok"], "cases": s["cases"], "at": r["at"], "opened": s["opened"],
+                "should_open": s["should_open"], "picked": s["picked"]}
 
     # ---------------------------------------------------------------- views
 

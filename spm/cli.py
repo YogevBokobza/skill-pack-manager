@@ -11,6 +11,7 @@ and agents.
   spm export PACK... [-o FILE]   a pack file: packs, skill sources, MCP servers without secrets
   spm import FILE [FOLDER]       preview a pack file, then add its packs (and attach them)
   spm manifest [FOLDER]          the folder's .skillpacks.json; --write PACK... creates it
+  spm router-test PACK           test a pack router with the AI writer (--cases FILE, --write-cases)
   spm packs                      packs with their skills, MCP servers, folders
   spm skills [QUERY]             skills in the store
   spm tokens [FOLDER]            estimated context cost per agent
@@ -38,7 +39,7 @@ from .mcp import McpError
 from .sources import SourceError
 
 COMMANDS = ("status", "sync", "attach", "detach", "extra", "pack", "packs", "skills", "tokens", "usage", "suggest",
-            "scan", "check-updates", "update", "rollback", "export", "import", "manifest")
+            "scan", "check-updates", "update", "rollback", "export", "import", "manifest", "router-test")
 LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini": "Gemini CLI"}
 
 
@@ -84,6 +85,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("folder", nargs="?", help="attach the file's \"attach\" packs to this folder")
     p.add_argument("--replace", action="store_true", help="replace packs that exist with other content")
+    p = cmd("router-test", "test whether agents open a pack router and pick the right skill")
+    p.add_argument("pack")
+    p.add_argument("--cases", help="file with 'skill: request' lines (default: the last test's requests)")
+    p.add_argument("--write-cases", action="store_true", help="have the AI write new requests first")
+    p.add_argument("--writer", help="AI writer (default: the one in Settings)")
     p = cmd("manifest", "show or write the folder's .skillpacks.json", change=True)
     p.add_argument("folder", nargs="?")
     p.add_argument("--write", nargs="+", metavar="PACK", help="write .skillpacks.json asking for these packs")
@@ -444,6 +450,31 @@ class Cli:
             self.p("matches packs.json" if summary["done"] else "not applied yet: spm manifest --apply")
             self.show_import(share.preview(self.m, self.m.load(), m))
         return self.emit(summary | {"manifest": m}, text)
+
+    def c_router_test(self):
+        if self.a.cases:
+            text = Path(self.a.cases).read_text(encoding="utf8")
+        elif self.a.write_cases:
+            text = self.app.router_test("test-cases", {"pack": self.a.pack, "writer": self.a.writer})["text"]
+            if not self.a.json:
+                self.p("requests written by the AI:")
+                for line in text.splitlines():
+                    self.p("  " + line)
+        else:
+            text = self.app.router_test("test-cases", {"pack": self.a.pack, "saved": True})["text"]
+            if not text:
+                raise CliError("no saved requests; use --write-cases or --cases FILE")
+        r = self.app.router_test("test", {"pack": self.a.pack, "text": text, "writer": self.a.writer})
+        sm = r["summary"]
+
+        def out():
+            self.p(f"{sm['ok']}/{sm['cases']} right: opened {sm['opened']}/{sm['should_open']}, "
+                   f"right skill {sm['picked']}/{sm['opened']}, stayed out {sm['stayed_out']}/{sm['off_topic']}")
+            for x in r["results"]:
+                went = "no answer" if not x["answered"] else x["chosen"] or ("opened, no skill" if x["opened"] else "did not open")
+                self.p(f"  {'ok ' if x['ok'] else 'BAD'} {x['request'][:70]:<70}  {x['expected'] or 'stay out'} -> {went}")
+        self.emit(r, out)
+        return 0 if sm["ok"] == sm["cases"] else 3
 
     def confirm(self) -> int | None:
         """None to go on; an exit code to stop with."""

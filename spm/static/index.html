@@ -656,6 +656,7 @@ function routerSection(p) {
   return h("div", { class: "card", style: "margin-top:16px" },
     h("div", { class: "row" }, h("b", { style: "flex:1" }, "Router: ", h("code", {}, r.name)),
       h("button", { class: "btn", onclick: () => editRouter(p) }, "Edit…"),
+      h("button", { class: "btn", title: "Check that agents open the router and pick the right skill", onclick: () => testRouter(p) }, "Test…"),
       h("button", { class: "btn danger", onclick: () => op("router_remove", { pack: p.name }, `Remove router of ${p.name}`) }, "Remove")),
     h("div", { class: "muted", style: "font-size:12px; margin:6px 0 10px" }, r.description),
     h("div", { class: "row" }, seg,
@@ -665,7 +666,53 @@ function routerSection(p) {
     h("div", { class: "row", style: "margin-top:8px" },
       h("span", { class: "badge" }, WRITER_LABEL[r.writer] || r.writer || "template"),
       r.edited ? h("span", { class: "badge" }, "edited by hand") : null,
-      r.stale ? h("span", { class: "badge b-warn", title: "Skills were added or removed since the description was written" }, "description out of date") : null));
+      r.stale ? h("span", { class: "badge b-warn", title: "Skills were added or removed since the description was written" }, "description out of date") : null,
+      r.test ? h("span", { class: "badge " + (r.test.ok === r.test.cases ? "b-ok" : "b-warn"), title: `Last test ${new Date(r.test.at * 1000).toLocaleString()}: opened for ${r.test.opened}/${r.test.should_open}, right skill ${r.test.picked}/${r.test.should_open}` },
+        `test: ${r.test.ok}/${r.test.cases} right`) : null));
+}
+
+async function testRouter(p) {
+  const ai = writersAvailable().filter(w => w !== "template");
+  if (!ai.length) return toast("Testing needs an AI writer: install the Claude or Codex CLI, or add an API key in Settings", true);
+  const writerSel = h("select", {}, ...ai.map(w => h("option", { value: w, selected: w === S.state.settings.ai.writer }, WRITER_LABEL[w])));
+  const ta = h("textarea", { rows: 12, style: "width:100%; font-family: ui-monospace, monospace; font-size:12px",
+    placeholder: `one request per line, after the skill that should handle it:\n${p.skills[0] || "skill-name"}: make the hero section feel less generic\nnone: rename this Python variable everywhere` });
+  await guard(async () => { const last = await api("/api/router/test-cases", { pack: p.name, saved: true }); ta.value = last.text || ""; });
+  const gen = h("button", { class: "btn", onclick: () => guard(async () => {
+    gen.disabled = true; gen.textContent = "Writing…";
+    try { ta.value = (await api("/api/router/test-cases", { pack: p.name, writer: writerSel.value })).text; }
+    finally { gen.disabled = false; gen.textContent = "Write requests with AI"; }
+  }) }, "Write requests with AI");
+  S.routerTest = null;
+  const ok = await openModal(`Test the ${p.name} router`, [
+    h("p", { class: "muted" }, `The AI plays the agent: it sees only the description of using-${p.name}, decides whether to open it for each request, then picks a skill from the index. One run is one AI call; it uses your subscription or API key.`),
+    h("div", { class: "row", style: "margin-bottom:8px" }, h("span", { class: "muted", style: "font-size:12px" }, "AI:"), writerSel, gen),
+    ta,
+    h("p", { class: "muted", style: "font-size:12px" }, "Use none for requests the pack should stay out of. The requests are saved with the result, so you can run the same test after changing the description."),
+  ], [{ label: "Cancel" }, { label: "Run test", primary: true, busy: "Testing…", run: async () =>
+    (S.routerTest = await api("/api/router/test", { pack: p.name, text: ta.value, writer: writerSel.value })) }], true);
+  if (!ok || !S.routerTest) return;
+  const r = S.routerTest, sm = r.summary;
+  await refresh();
+  const tips = [];
+  if (sm.missed.length) tips.push(`The description did not bring the agent in for ${plural(sm.missed.length, "request")}. Add the words those requests use to the router description (Edit…).`);
+  for (const [exp, got] of Object.entries(sm.confusions))
+    tips.push(`${exp}'s requests went to ${Object.keys(got).join(", ")}. Make their index lines say what sets them apart.`);
+  if (sm.off_topic && sm.stayed_out < sm.off_topic) tips.push(`The router opened for ${sm.off_topic - sm.stayed_out} off-topic request(s) and picked a skill. Make the description narrower.`);
+  await openModal(`${p.name} router: ${sm.ok} of ${sm.cases} right`, [
+    h("div", { class: "stats" },
+      h("div", { class: "stat" }, h("b", { class: sm.opened === sm.should_open ? "b-ok" : "b-warn" }, `${sm.opened}/${sm.should_open}`), h("span", {}, "opened when it should")),
+      h("div", { class: "stat" }, h("b", { class: sm.picked === sm.opened ? "b-ok" : "b-warn" }, `${sm.picked}/${sm.opened}`), h("span", {}, "right skill once open")),
+      sm.off_topic ? h("div", { class: "stat" }, h("b", { class: sm.stayed_out === sm.off_topic ? "b-ok" : "b-warn" }, `${sm.stayed_out}/${sm.off_topic}`), h("span", {}, "stayed out of off-topic")) : null),
+    tips.length ? h("ul", {}, ...tips.map(t => h("li", { class: "b-warn" }, t))) : h("p", { class: "b-ok" }, "Every request went where it should."),
+    h("table", { style: "margin-top:10px" }, h("thead", {}, h("tr", {}, ...["", "Request", "Should go to", "Went to"].map(t => h("th", {}, t)))),
+      h("tbody", {}, ...r.results.map(x => h("tr", {},
+        h("td", {}, h("span", { class: x.ok ? "b-ok" : "b-bad" }, x.ok ? "✓" : "✗")),
+        h("td", { class: "desc" }, x.request),
+        h("td", { style: "white-space:nowrap" }, x.expected || h("span", { class: "muted" }, "stay out")),
+        h("td", { style: "white-space:nowrap" }, !x.answered ? h("span", { class: "b-warn" }, "no answer") : !x.opened ? h("span", { class: "muted" }, "did not open") : (x.chosen || h("span", { class: "muted" }, "opened, no skill"))))))),
+    h("p", { class: "muted", style: "font-size:12px" }, `Judged by ${WRITER_LABEL[r.writer] || r.writer}. A real agent also sees its other skills and the conversation, so treat this as a check of the text.`),
+  ], [{ label: "Close" }], true);
 }
 
 async function editRouter(p) {
