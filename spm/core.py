@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import mcp, repo, router, usage
+from . import insights, mcp, repo, router, usage
 from .osinfo import (APP_ROOT, HOME, NO_WINDOW, PROJECT_SKILL_DIRS as SKILL_DIRS, claude_cli, data_dir,
                      default_scan_roots, is_link, make_junction)
 from .sources import CcSwitchSource
@@ -88,6 +88,13 @@ class Config:
 
 def norm(p) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(str(p))))
+
+
+def _subdirs(d: Path) -> list[Path]:
+    try:
+        return sorted(c for c in d.iterdir() if c.is_dir() and not is_link(c) and not c.name.startswith("."))
+    except OSError:
+        return []
 
 
 def is_within(child, parent) -> bool:
@@ -678,6 +685,7 @@ class Model:
         for d, r in sorted(rows.items()):
             src = r.get("source") or {}
             out.append({"dir": d, "name": r["name"], "description": (r.get("description") or "")[:400],
+                        "tokens": insights.tokens(r["name"], r.get("description") or ""),
                         "core": bool(r.get("global")), "global": r.get("global", []),
                         "source": r.get("source"), "updated_at": r.get("updated_at"),
                         "web_url": repo.web_url(src.get("url"), src.get("ref"), src.get("path")),
@@ -711,7 +719,7 @@ class Model:
         p = self.full_plan(data, f, catalog)
         return {"folder": folder, "exists": f.is_dir(), "packs": packs_of(data, f),
                 "extras": extras_of(data, f), "mcp_extras": mcp_extras_of(data, f), "skills": skills,
-                "mcp": self.mcp_view(data, f, catalog, p),
+                "mcp": self.mcp_view(data, f, catalog, p), "cost": insights.folder_cost(self, data, f),
                 "in_sync": not (p["add"] or p["remove"] or p["mcp_add"] or p["mcp_remove"]), "plan": p}
 
     def mcp_view(self, data: dict, f: Path, catalog: mcp.Catalog, p: dict) -> list[dict]:
@@ -778,20 +786,32 @@ class Model:
     # ----------------------------------------------------------------- scan
 
     def scan(self, max_depth: int = 3) -> list[dict]:
+        """Projects under the scan roots: git repositories, game engine
+        projects, and folders that hold linked skills. Each gets tags (engine,
+        language, framework) and the packs that fit it."""
         data = self.load()
         skip = {"node_modules", "Library", "Temp", "Logs", "obj", "bin", "Build", "Builds",
                 "Intermediate", "Saved", "DerivedDataCache", "Binaries", "Packages", "venv"}
         found, seen = [], set()
+        engines = {"unity", "unreal", "godot"}
 
         def kind_of(d: Path) -> str | None:
-            if (d / "ProjectSettings" / "ProjectVersion.txt").is_file():
-                return "unity"
-            try:
-                if any(x.suffix == ".uproject" for x in d.iterdir() if x.is_file()):
-                    return "unreal"
-            except OSError:
-                return None
+            for name, test in insights.ENGINES:
+                try:
+                    if test(d):
+                        return name
+                except OSError:
+                    return None
             return None
+
+        def project_tags(root: Path, sub: Path | None) -> list[str]:
+            tags = insights.tags_of(root)
+            # a monorepo keeps its parts one level down: client/, server/, web/
+            for c in ([sub] if sub else []) + [x for x in _subdirs(root) if x.name not in skip][:30]:
+                for t in insights.tags_of(c):
+                    if t not in tags:
+                        tags.append(t)
+            return tags
 
         def has_links(d: Path) -> bool:
             for rel in SKILL_DIRS:
@@ -814,24 +834,39 @@ class Model:
                     continue
                 k = kind_of(c)
                 links = has_links(c)
-                if k or links:
+                repo_root = (c / ".git").exists()
+                if k or links or repo_root:
                     # a Unity project in <repo>\client belongs to the repo root,
                     # where agents start
-                    root = c if (c / ".git").exists() or not (c.parent / ".git").exists() else c.parent
+                    root = c if repo_root or not (c.parent / ".git").exists() else c.parent
                     if norm(root) in seen:
                         continue
                     seen.add(norm(root))
-                    found.append({"folder": str(root), "kind": k or "other",
-                                  "subdir": c.name if root != c else None,
+                    sub = c if root != c else None
+                    if not k and sub is None:  # <repo>/client holding the Unity project
+                        sub = next((x for x in _subdirs(root) if x.name not in skip and kind_of(x)), None)
+                        k = kind_of(sub) if sub else None
+                    tags = project_tags(root, sub)
+                    kind = k or next((t for t in tags if t in engines), None) or (tags[0] if tags else "other")
+                    found.append({"folder": str(root), "kind": kind, "tags": tags,
+                                  "subdir": sub.name if sub else None,
                                   "worktree": (root / ".git").is_file(),
                                   "packs": packs_of(data, root), "extras": extras_of(data, root),
                                   "has_links": links or has_links(root)})
-                if not k and depth < max_depth:
+                    continue  # a project's own subfolders are not separate projects
+                if depth < max_depth:
                     walk(c, depth + 1)
 
         for root in self.cfg.scan_roots:
             if root.is_dir():
                 walk(root, 1)
+        tags_by_folder = {norm(p["folder"]): p["tags"] for p in found}
+        for path in all_folders(data):  # folders outside the scan roots teach the matcher too
+            if norm(path) not in tags_by_folder and Path(path).is_dir():
+                tags_by_folder[norm(path)] = project_tags(Path(path), None)
+        for p in found:
+            p["suggested"] = [s for s in insights.suggest_packs(p["tags"], data, tags_by_folder)
+                              if s["pack"] not in p["packs"]]
         return sorted(found, key=lambda x: x["folder"].lower())
 
     # ---------------------------------------------------------------- usage
@@ -842,18 +877,37 @@ class Model:
         by_name = {r["name"]: d for d, r in skills.items()}
         names = set(skills) | set(by_name)
         raw = usage.collect(names, self.cfg.home)
-        out: dict[str, dict] = {}
+        out: dict = {"_since": raw.pop("_since", None)}
+        raw.pop("_counted", None)
         for name, u in raw.items():
             d = name if name in skills else by_name.get(name)
             if not d:
                 continue
-            cur = out.setdefault(d, {"uses": 0, "last": "", "where": []})
+            cur = out.setdefault(d, {"uses": 0, "last": "", "where": [], "folders": [], "agents": {},
+                                     "router": 0, "days": {}})
             cur["uses"] += u["uses"]
             cur["last"] = max(cur["last"], u["last"])
-            cur["where"] = (cur["where"] + u["where"])[:3]
+            cur["router"] += u["router"]
+            for key in ("agents", "days"):
+                for k, n in u[key].items():
+                    cur[key][k] = cur[key].get(k, 0) + n
+            merged = {f: [n, last] for f, n, last in cur["folders"]}
+            for f, n, last in u["folders"]:
+                m = merged.setdefault(f, [0, "?"])
+                m[0] += n
+                m[1] = last if m[1] == "?" or (last != "?" and last > m[1]) else m[1]
+            cur["folders"] = sorted(([f, n, last] for f, (n, last) in merged.items()), key=lambda x: -x[1])
+            cur["where"] = [f[:2] for f in cur["folders"][:3]]
+            cur["days"] = dict(sorted(cur["days"].items()))
         self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
         (self.cfg.data_dir / "usage.json").write_text(json.dumps(out), encoding="utf8")
         return out
+
+    def insights(self, days: int = 60) -> dict:
+        """Context cost per agent and folder, and cleanup suggestions."""
+        data = self.load()
+        return {"costs": insights.costs(self, data), "days": days,
+                "suggestions": insights.suggestions(self, data, self.cached_usage(), days)}
 
     def cached_usage(self) -> dict:
         f = self.cfg.data_dir / "usage.json"

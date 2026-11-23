@@ -101,6 +101,11 @@ pre.preview { background: var(--panel2); padding: 10px; border-radius: 6px; max-
 .card.choice.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
 .field > input, .field > select, .field > textarea { font-size: 14px; color: var(--fg); }
+.bars { display: flex; align-items: flex-end; gap: 6px; height: 110px; padding: 8px 10px 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-width: 620px; }
+.bars .bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
+.bars .bar span { font-size: 11px; color: var(--muted); }
+.bars .bar i { display: block; width: 100%; min-height: 2px; background: var(--accent); border-radius: 3px 3px 0 0; }
+.costline { font-size: 12px; color: var(--muted); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -125,7 +130,8 @@ pre.preview { background: var(--panel2); padding: 10px; border-radius: 6px; max-
 "use strict";
 const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
 const S = { tab: "folders", state: null, folder: null, pack: null, folderView: null,
-            filter: "", skillFilter: "all", skillQuery: "", scan: null, scanOnlyMissing: true, scanWorktrees: false, newFolder: null, selected: new Set(), lastPick: null };
+            filter: "", skillFilter: "all", skillQuery: "", scan: null, scanOnlyMissing: true, scanWorktrees: false, newFolder: null, selected: new Set(), lastPick: null,
+            insights: null, usageDays: 60, usageQuery: "", usageUnused: false, dismissed: new Set() };
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -275,21 +281,23 @@ async function refresh() {
   fill($("skilllist"), ...S.state.skills.map(s => h("option", { value: s.dir }, s.description.slice(0, 90))));
   fill($("mcplist"), ...S.state.mcp.map(m => h("option", { value: m.name }, m.url || [m.command, ...m.args].join(" ").slice(0, 90))));
   if (S.folder && S.tab === "folders") S.folderView = await api("/api/folder?path=" + encodeURIComponent(S.folder));
+  if (S.tab === "usage") S.insights = await api(`/api/insights?days=${S.usageDays}`);
+  else S.insights = null;  // costs change with every operation; fetched again on the tab
   render();
   if (!S.state.settings.mode && !S.firstRunShown) { S.firstRunShown = true; firstRun(); }
 }
 
 // ------------------------------------------------------------------ views
-const TABS = [["folders", "Folders"], ["packs", "Packs"], ["skills", "Skills"], ["mcp", "MCP servers"], ["scan", "Find projects"], ["settings", "Settings"]];
+const TABS = [["folders", "Folders"], ["packs", "Packs"], ["skills", "Skills"], ["mcp", "MCP servers"], ["usage", "Usage"], ["scan", "Find projects"], ["settings", "Settings"]];
 function renderNav() {
   fill($("nav"), ...TABS.map(([k, label]) =>
-    h("button", { "aria-pressed": String(S.tab === k), onclick: () => { S.tab = k; S.filter = ""; S.skillQuery = ""; render(); if (k === "scan" && !S.scan) runScan(); } }, label)));
+    h("button", { "aria-pressed": String(S.tab === k), onclick: () => { S.tab = k; S.filter = ""; S.skillQuery = ""; render(); if (k === "scan" && !S.scan) runScan(); if (k === "usage" && !S.insights) loadInsights(); } }, label)));
 }
 function render() {
   renderNav();
-  $("main").className = ["skills", "mcp", "scan", "settings"].includes(S.tab) ? "wide" : "";
+  $("main").className = ["skills", "mcp", "usage", "scan", "settings"].includes(S.tab) ? "wide" : "";
   $("list").style.display = $("main").className ? "none" : "";
-  ({ folders: renderFolders, packs: renderPacks, skills: renderSkills, mcp: renderMcp, scan: renderScan, settings: renderSettings })[S.tab]();
+  ({ folders: renderFolders, packs: renderPacks, skills: renderSkills, mcp: renderMcp, usage: renderUsage, scan: renderScan, settings: renderSettings })[S.tab]();
 }
 
 function statusDot(f) {
@@ -421,6 +429,9 @@ function renderFolderDetail() {
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, f),
       h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: f })) }, "Open folder"),
       v.in_sync ? null : h("button", { class: "btn primary", onclick: () => op("sync", { folder: f }, "Sync folder") }, "Sync")),
+    v.cost && v.cost.claude ? h("div", { class: "costline", title: "Estimated tokens of skill names and descriptions each agent lists in every session here, global skills included" },
+      "Skill listings per session: ", AGENTS.map(a => `${CLIENT_LABEL[a]} ≈ ${num(v.cost[a].tokens)} tokens (${plural(v.cost[a].count, "skill")})`).join(" · "),
+      " · ", h("a", { href: "#", onclick: e => { e.preventDefault(); S.tab = "usage"; render(); loadInsights(); } }, "details")) : null,
     v.exists ? null : h("p", { class: "b-bad" }, "This folder does not exist any more. Detach its packs to clean up packs.json."),
     S.newFolder === f ? h("p", { class: "muted" }, "New folder: attach a pack or add a skill to start managing it.") : null,
     h("h3", {}, "Packs"),
@@ -448,7 +459,7 @@ function renderFolderDetail() {
 
 function guessPack(folder) {
   const proj = (S.scan || []).find(p => p.folder.toLowerCase() === folder.toLowerCase());
-  return proj && S.state.packs.some(p => p.name === proj.kind) ? proj.kind : undefined;
+  return proj && proj.suggested && proj.suggested.length ? proj.suggested[0].pack : undefined;
 }
 
 // Packs -----------------------------------------------------------------
@@ -707,7 +718,8 @@ function renderSkills() {
         box.addEventListener("click", e => { e.preventDefault(); pick(s, i, e); });
         return h("tr", { class: S.selected.has(s.dir) ? "picked" : "" },
           h("td", {}, box),
-          h("td", { style: "white-space:nowrap" }, s.dir, s.name !== s.dir ? h("div", { class: "muted", style: "font-size:11px" }, s.name) : null),
+          h("td", { style: "white-space:nowrap" }, s.dir, s.name !== s.dir ? h("div", { class: "muted", style: "font-size:11px" }, s.name) : null,
+            h("div", { class: "muted", style: "font-size:11px", title: "Estimated tokens its name and description take in every session where it is listed" }, `≈ ${num(s.tokens)} tokens`)),
           h("td", { class: "desc" }, s.description.slice(0, 200)),
           h("td", {}, sourceCell(s)),
           h("td", {}, globalCell(s, "skill")),
@@ -757,6 +769,151 @@ function pollUsage() {
     await refresh();
     if (!S.state.usage_job.running) { clearInterval(t); toast(S.state.usage_job.error ? "Usage count failed" : "Usage counted", !!S.state.usage_job.error); }
   }), 4000);
+}
+
+// Usage -----------------------------------------------------------------
+const num = n => Number(n || 0).toLocaleString();
+const AGENTS = ["claude", "opencode", "codex"];
+async function loadInsights() {
+  await guard(async () => { S.insights = await api(`/api/insights?days=${S.usageDays}`); render(); });
+}
+function countUsageButton() {
+  const job = S.state.usage_job, usage = S.state.usage || {};
+  return h("button", { class: "btn" + (usage._at ? "" : " primary"), disabled: job.running, onclick: () => guard(async () => {
+    await api("/api/usage", {}); toast("Counting usage across past sessions; this can take a minute"); await refresh(); pollUsage(); }) },
+    job.running ? "Counting usage…" : usage._at ? "Recount usage" : "Count usage");
+}
+function costCell(c) {
+  if (!c) return h("span", { class: "muted" }, "–");
+  return h("div", {}, h("b", {}, `≈ ${num(c.tokens)}`), h("div", { class: "muted", style: "font-size:11px" }, plural(c.count, "skill")));
+}
+function weekBars(usage) {
+  // uses per week, the last 12 weeks, newest on the right
+  const today = new Date(new Date().toISOString().slice(0, 10)), weeks = new Array(12).fill(0);
+  for (const [k, u] of Object.entries(usage)) {
+    if (k.startsWith("_")) continue;
+    for (const [day, n] of Object.entries(u.days || {})) {
+      const w = Math.floor((today - new Date(day)) / (7 * 864e5));
+      if (w >= 0 && w < 12) weeks[11 - w] += n;
+    }
+  }
+  const max = Math.max(1, ...weeks);
+  return h("div", { class: "bars", role: "img", "aria-label": `Uses per week, last 12 weeks: ${weeks.join(", ")}` },
+    ...weeks.map((n, i) => h("div", { class: "bar", title: `${11 - i === 0 ? "this week" : `${11 - i} week${11 - i === 1 ? "" : "s"} ago`}: ${n}` },
+      h("span", {}, n || ""), h("i", { style: `height:${Math.round(n / max * 82)}%` }))));
+}
+function suggestionCard(s) {
+  const key = `${s.kind}:${s.skill || ""}:${s.pack || ""}:${s.folder || ""}`;
+  if (S.dismissed.has(key)) return null;
+  const a = s.action;
+  const LABEL = { unused_global: "Turn off globally", global_one_folder: "Move to that folder", unused_in_pack: "Remove from pack",
+                  unused_extra: "Remove from folder", create_router: "Create router…" };
+  const offGlobal = clients => Promise.all(clients.map(c => api("/api/skill/global", { dir: s.skill, client: c, on: false })));
+  const run = async () => {
+    if (a.router) { const p = S.state.packs.find(x => x.name === a.router); S.tab = "packs"; S.pack = a.router; render(); if (p) await editRouter(p); return; }
+    if (a.global_off) { await guard(async () => { await offGlobal(a.global_off); toast(`${s.skill}: off globally for ${a.global_off.map(c => CLIENT_LABEL[c]).join(", ")}`); await refresh(); }); return; }
+    const ok = await op(a.op, a.args, LABEL[s.kind]);
+    if (ok && (a.then_global_off || []).length) await guard(async () => { await offGlobal(a.then_global_off); await refresh(); });
+  };
+  return h("div", { class: "card", style: "margin-bottom:8px" },
+    h("div", { class: "row", style: "flex-wrap:nowrap; align-items:flex-start" },
+      h("div", { style: "flex:1", title: s.folder || "" }, s.text, s.hint ? h("div", { class: "muted", style: "font-size:12px; margin-top:3px" }, s.hint) : null),
+      s.tokens ? h("span", { class: "badge b-ok", title: "Estimated tokens saved in every session" }, `≈ ${num(s.tokens)} tokens`) : null,
+      a ? h("button", { class: "btn", onclick: run }, LABEL[s.kind]) : null,
+      h("button", { class: "btn", title: "Hide until the app restarts", onclick: () => { S.dismissed.add(key); renderUsage(); } }, "Dismiss")));
+}
+function renderUsage() {
+  const st = S.state, usage = st.usage || {}, ins = S.insights, counted = !!usage._at;
+  const daysSel = h("select", { "aria-label": "Look-back period" }, ...[30, 60, 90, 180].map(n => h("option", { value: n, selected: n === S.usageDays }, `${n} days`)));
+  daysSel.addEventListener("change", () => { S.usageDays = Number(daysSel.value); loadInsights(); });
+  const skills = st.skills.map(s => ({ ...s, u: usage[s.dir] })).sort((a, b) => ((b.u || {}).uses || 0) - ((a.u || {}).uses || 0) || a.dir.localeCompare(b.dir));
+  const used = skills.filter(s => s.u && s.u.uses), total = used.reduce((n, s) => n + s.u.uses, 0);
+  const viaRouter = used.reduce((n, s) => n + (s.u.router || 0), 0);
+  const byAgent = {};
+  used.forEach(s => Object.entries(s.u.agents || {}).forEach(([a, n]) => byAgent[a] = (byAgent[a] || 0) + n));
+  const q = S.usageQuery.toLowerCase();
+  const rows = (S.usageUnused ? skills.filter(s => !s.u || !s.u.uses) : used).filter(s => !q || s.dir.toLowerCase().includes(q));
+  // uses per folder, summed over skills
+  const folders = {};
+  for (const s of used) for (const [f, n] of s.u.folders || s.u.where || []) {
+    const e = folders[f] = folders[f] || { uses: 0, skills: [] };
+    e.uses += n; e.skills.push([s.dir, n]);
+  }
+  const folderRows = Object.entries(folders).sort((a, b) => b[1].uses - a[1].uses);
+  const sugg = ins ? ins.suggestions.map(suggestionCard).filter(Boolean) : [];
+  const costs = ins && ins.costs;
+
+  fill($("detail"),
+    h("div", { class: "row" }, h("h2", { style: "flex:1" }, "Usage"), countUsageButton()),
+    h("p", { class: "muted" }, "How often agents used each skill, and what the skills they can see cost in every session. ",
+      "Counted: Skill tool calls and slash commands (Claude Code), the skill tool (OpenCode), SKILL.md reads (Codex), and skills read through a pack router.",
+      counted ? ` Last counted ${new Date(usage._at * 1000).toLocaleString()}${usage._since ? `; the logs go back to ${usage._since}` : ""}.` : ""),
+    st.usage_job.error ? h("p", { class: "b-bad" }, st.usage_job.error) : null,
+    counted ? h("div", { class: "stats" },
+      h("div", { class: "stat" }, h("b", {}, num(total)), h("span", {}, "uses")),
+      h("div", { class: "stat" }, h("b", {}, `${used.length} / ${st.skills.length}`), h("span", {}, "skills used")),
+      h("div", { class: "stat" }, h("b", { class: skills.length - used.length ? "b-warn" : "" }, skills.length - used.length), h("span", {}, "never used")),
+      h("div", { class: "stat" }, h("b", {}, num(viaRouter)), h("span", {}, "through a router")),
+      ...AGENTS.filter(a => byAgent[a]).map(a => h("div", { class: "stat" }, h("b", {}, num(byAgent[a])), h("span", {}, CLIENT_LABEL[a]))))
+      : h("div", { class: "card", style: "margin-top:12px" }, "Count usage to see which skills your agents use. It reads your past sessions on this computer; nothing leaves it."),
+    counted ? h("div", {}, h("h3", {}, "Uses per week"), weekBars(usage)) : null,
+
+    h("div", { class: "row", style: "margin-top:26px" }, h("h3", { style: "margin:0; flex:1" }, `Suggestions${sugg.length ? ` (${sugg.length})` : ""}`),
+      h("span", { class: "muted", style: "font-size:12px" }, "Not used in the last"), daysSel),
+    !ins ? h("p", { class: "muted" }, "Loading…")
+      : sugg.length ? h("div", { style: "margin-top:8px" }, ...sugg)
+      : h("p", { class: "muted" }, counted ? "Nothing to clean up." : "Count usage first for ideas based on use. Router ideas need no count."),
+
+    h("h3", {}, "Context cost per session (estimate)"),
+    h("p", { class: "muted", style: "font-size:12px" }, "Every skill an agent can see puts its name and description into every session. ",
+      "Estimated at about 4 characters per token, from the skills folders each agent reads (global ones and the project's). Built-in and plugin skills are not counted."),
+    costs ? h("table", {}, h("thead", {}, h("tr", {}, ...["Where", "Claude", "OpenCode", "Codex", "Routers", ""].map(t => h("th", {}, t)))),
+      h("tbody", {},
+        h("tr", {}, h("td", {}, h("b", {}, "Outside projects"), h("div", { class: "muted", style: "font-size:11px" }, "global skills only")),
+          ...AGENTS.map(a => h("td", {}, costCell(costs.global[a]))), h("td", {}), h("td", {})),
+        ...costs.folders.map(f => {
+          const saved = f.packs.reduce((n, p) => n + p.saved, 0), could = f.packs.reduce((n, p) => n + p.could_save, 0);
+          const listing = {};
+          for (const a of AGENTS) for (const s of f.agents[a].skills) (listing[s.skill] = listing[s.skill] || { ...s, agents: [] }).agents.push(CLIENT_LABEL[a]);
+          return h("tr", {},
+            h("td", { style: "word-break:break-all" }, linkish(f.folder)),
+            ...AGENTS.map(a => h("td", {}, costCell(f.agents[a]))),
+            h("td", { style: "font-size:12px" }, saved ? h("div", { class: "b-ok" }, `saves ≈ ${num(saved)}`) : null,
+              could ? h("div", { class: "b-warn", title: "Estimated saving if the packs without a router got one" }, `could save ≈ ${num(could)}`) : null,
+              !saved && !could ? h("span", { class: "muted" }, "–") : null),
+            h("td", {}, h("details", {}, h("summary", { class: "muted", style: "font-size:12px; cursor:pointer" }, "skills"),
+              h("table", { style: "margin-top:6px" }, h("tbody", {}, ...Object.values(listing).sort((x, y) => y.tokens - x.tokens).map(s => h("tr", {},
+                h("td", { style: "white-space:nowrap" }, s.skill), h("td", {}, h("span", { class: "badge" + (s.scope === "global" ? " b-info" : "") }, s.scope)),
+                h("td", { class: "muted", style: "font-size:11px" }, s.agents.join(", ")), h("td", { style: "text-align:right" }, `≈ ${num(s.tokens)}`))))))));
+        }))) : h("p", { class: "muted" }, "Loading…"),
+
+    counted ? h("div", {},
+      h("div", { class: "row", style: "margin-top:26px" }, h("h3", { style: "margin:0; flex:1" }, S.usageUnused ? `Never used (${rows.length})` : `Skills by use (${used.length})`),
+        h("div", { class: "seg" }, ...[[false, "Used"], [true, "Never used"]].map(([k, l]) =>
+          h("button", { "aria-pressed": String(S.usageUnused === k), onclick: () => { S.usageUnused = k; renderUsage(); } }, l))),
+        h("input", { placeholder: "Filter skills", value: S.usageQuery, style: "width:200px",
+          oninput: e => { S.usageQuery = e.target.value; renderUsage(); const i = $("detail").querySelector("input[placeholder='Filter skills']"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } })),
+      rows.length ? h("table", { style: "margin-top:8px" }, h("thead", {}, h("tr", {}, ...(S.usageUnused ? ["Skill", "Global", "Packs", "≈ Tokens"] : ["Skill", "Uses", ...AGENTS.map(a => CLIENT_LABEL[a]), "Via router", "Last used", "Where"]).map(t => h("th", {}, t)))),
+        h("tbody", {}, ...rows.map(s => S.usageUnused
+          ? h("tr", {}, h("td", {}, s.dir), h("td", {}, s.global.map(c => CLIENT_LABEL[c]).join(", ") || h("span", { class: "muted" }, "–")),
+              h("td", {}, s.packs.join(", ") || h("span", { class: "muted" }, "–")), h("td", {}, num(s.tokens)))
+          : h("tr", {}, h("td", { style: "white-space:nowrap" }, s.dir), h("td", {}, h("b", {}, num(s.u.uses))),
+              ...AGENTS.map(a => h("td", {}, (s.u.agents || {})[a] ? num(s.u.agents[a]) : h("span", { class: "muted" }, "–"))),
+              h("td", {}, s.u.router ? num(s.u.router) : h("span", { class: "muted" }, "–")),
+              h("td", { style: "white-space:nowrap" }, s.u.last),
+              h("td", { class: "desc" }, (s.u.folders || s.u.where || []).slice(0, 3).map(([f, n]) => `${f === "?" ? "unknown" : base(f)} (${n})`).join(", ")))))) : h("p", { class: "muted" }, "No skills"),
+      h("h3", {}, `By folder (${folderRows.length})`),
+      folderRows.length ? h("table", {}, h("thead", {}, h("tr", {}, ...["Folder", "Uses", "Skills used"].map(t => h("th", {}, t)))),
+        h("tbody", {}, ...folderRows.slice(0, 50).map(([f, e]) => h("tr", {},
+          h("td", { style: "word-break:break-all" }, f === "?" ? h("span", { class: "muted" }, "unknown folder") : linkish(f)),
+          h("td", {}, num(e.uses)),
+          h("td", {}, h("div", { class: "chips", style: "margin:0" }, ...e.skills.sort((a, b) => b[1] - a[1]).slice(0, 8).map(([d, n]) => h("span", { class: "chip" }, `${d} ${n}`)),
+            e.skills.length > 8 ? h("span", { class: "muted", style: "font-size:12px" }, `+${e.skills.length - 8}`) : null)))))) : h("p", { class: "muted" }, "No folders")) : null);
+}
+// a folder name that opens its view when packs.json knows it
+function linkish(f) {
+  const known = S.state.folders.find(x => x.folder.toLowerCase() === f.toLowerCase());
+  return known ? h("a", { href: "#", onclick: e => { e.preventDefault(); S.tab = "folders"; selectFolder(known.folder); } }, f) : f;
 }
 
 function refList(refs, current) {
@@ -1076,21 +1233,25 @@ function renderScan() {
   const head = h("div", { class: "row" }, h("h2", { style: "flex:1" }, "Find projects"),
     h("label", { class: "row muted" }, h("input", { type: "checkbox", checked: S.scanOnlyMissing, onchange: e => { S.scanOnlyMissing = e.target.checked; render(); } }), "Only without a pack"),
     h("button", { class: "btn", onclick: runScan }, "Scan again"));
-  const intro = h("p", { class: "muted" }, `Unity and Unreal projects, and folders that already hold linked skills, under ${S.state.config.scan_roots.join(", ")} (3 levels deep). Change the roots with the SPM_SCAN_ROOTS variable.`);
+  const intro = h("p", { class: "muted" }, `Git repositories, Unity, Unreal and Godot projects, and folders that already hold linked skills, under ${S.state.config.scan_roots.join(", ")} (3 levels deep). `,
+    "Each project's stack comes from its marker files (package.json, pyproject.toml, Cargo.toml, ...); the suggested pack is the one named after the stack, or used by projects like it.");
   if (!S.scan) return fill(d, head, intro, h("div", { class: "empty" }, "Scanning…"));
   const rows = S.scan.filter(p => (!S.scanOnlyMissing || (!p.packs.length && !p.extras.length)) && (S.scanWorktrees || !p.worktree));
   head.insertBefore(h("label", { class: "row muted" }, h("input", { type: "checkbox", checked: S.scanWorktrees, onchange: e => { S.scanWorktrees = e.target.checked; render(); } }), "Show worktrees"), head.lastChild);
   fill(d, head, intro,
-    rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ...["Folder", "Type", "Packs", ""].map(t => h("th", {}, t)))),
+    rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ...["Folder", "Stack", "Packs", "Suggested", ""].map(t => h("th", {}, t)))),
       h("tbody", {}, ...rows.map(p => {
-        const [sel, n] = packSelect(p.packs, S.state.packs.some(x => x.name === p.kind) ? p.kind : undefined);
+        const sug = p.suggested || [];
+        const [sel, n] = packSelect(p.packs, sug.length ? sug[0].pack : undefined);
+        const tags = (p.tags || []).length ? p.tags : [p.kind];
         return h("tr", {},
           h("td", { style: "word-break:break-all" }, p.folder,
-            p.subdir ? h("div", { class: "muted", style: "font-size:11px" }, `${p.kind} project in ${p.subdir}\\, linked at the repo root`) : null),
-          h("td", {}, h("div", { class: "chips", style: "margin:0" }, h("span", { class: "chip" }, p.kind),
+            p.subdir ? h("div", { class: "muted", style: "font-size:11px" }, `${p.kind} project in ${p.subdir}${S.state.platform === "windows" ? "\\" : "/"}, linked at the repo root`) : null),
+          h("td", {}, h("div", { class: "chips", style: "margin:0" }, ...tags.map(t => h("span", { class: "chip" }, t)),
             p.worktree ? h("span", { class: "chip", title: "git worktree of another checkout" }, "worktree") : null,
             p.has_links && !p.packs.length ? h("span", { class: "chip b-warn", title: "Has linked skills but no pack in packs.json" }, "untracked links") : null)),
           h("td", {}, p.packs.join(", ") || h("span", { class: "b-warn" }, "none")),
+          h("td", { style: "font-size:12px" }, sug.length ? sug.map(s => h("div", {}, h("b", {}, s.pack), h("span", { class: "muted" }, ` · ${s.why}`))) : h("span", { class: "muted" }, "–")),
           h("td", {}, n ? h("div", { class: "row" }, sel, h("button", { class: "btn", onclick: () => op("attach", { pack: sel.value, folder: p.folder }, `Attach ${sel.value}`).then(runScan) }, "Attach")) : null));
       }))) : h("div", { class: "empty" }, "Every project found has a pack."));
 }
