@@ -32,6 +32,27 @@ class Server(Env):
             with e:
                 return e.code, json.loads(e.read())
 
+    def test_closed_page_is_not_an_error(self):
+        """A window closed mid-request: the answer can't be sent, and that is
+        no reason for a traceback (it used to print two)."""
+        import io
+        from unittest import mock
+        from spm.server import make_handler
+        h = object.__new__(make_handler(self.app, {"port": self.port}))
+        h._allowed = lambda: True
+        sent = []
+
+        def gone(code, body):
+            sent.append(code)
+            raise ConnectionAbortedError(10053, "aborted")
+        h._json = gone
+        with mock.patch("sys.stderr", new=io.StringIO()) as err:
+            h._dispatch(lambda: {"ok": True})
+            h._dispatch(lambda: 1 / 0)  # a real error is still printed
+        self.assertEqual(sent, [200, 500])
+        self.assertEqual(err.getvalue().count("Traceback"), 1)
+        self.assertIn("ZeroDivisionError", err.getvalue())
+
     def test_rejects_missing_token(self):
         self.assertEqual(self.call("/api/state", token=False)[0], 403)
 
