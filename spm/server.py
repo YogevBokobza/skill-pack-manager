@@ -408,12 +408,16 @@ def make_handler(app: App, port_ref: dict):
             if not self._allowed():
                 return self._json(403, {"error": "forbidden"})
             try:
-                self._json(200, fn())
+                code, body = 200, fn()
             except USER_ERRORS as e:
-                self._json(400, {"error": str(e).strip("'\"")})
+                code, body = 400, {"error": str(e).strip("'\"")}
             except Exception as e:
                 traceback.print_exc()
-                self._json(500, {"error": f"{type(e).__name__}: {e}"})
+                code, body = 500, {"error": f"{type(e).__name__}: {e}"}
+            try:
+                self._json(code, body)
+            except ConnectionError:
+                pass  # the page closed or reloaded before the answer arrived; nobody is left to tell
 
         def do_GET(self):
             u = urlparse(self.path)
