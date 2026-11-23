@@ -162,7 +162,8 @@ class App:
             draft = router.write_with_ai(writer, b["pack"], skills, claude_cli=m.cfg.claude_cli,
                                          model=(ai.get("models") or {}).get(writer, ""),
                                          api_key=self.secrets.load().get(writer, ""))
-            return draft | {"writer": writer, "skills": [s["name"] for s in skills]}
+            return draft | {"writer": writer, "skills": [s["name"] for s in skills],
+                            "descriptions": {s["name"]: router.one_line(s["description"]) for s in skills}}
         if path == "/api/secret":
             if b.get("name") not in ("anthropic", "openai"):
                 raise OpError("unknown key")

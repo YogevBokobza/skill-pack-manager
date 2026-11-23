@@ -32,11 +32,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import mcp, repo, router, usage
-from .osinfo import APP_ROOT, HOME, NO_WINDOW, PROJECT_SKILL_DIRS as SKILL_DIRS, claude_cli, data_dir, default_scan_roots
+from .osinfo import (APP_ROOT, HOME, NO_WINDOW, PROJECT_SKILL_DIRS as SKILL_DIRS, claude_cli, data_dir,
+                     default_scan_roots, is_link, make_junction)
 from .sources import CcSwitchSource
 
 EXTRA = "+extra"
-HIDDEN_DIR = ".skill-packs"  # skills behind a pack router; agents do not scan it
+HIDDEN_DIR = ".skill-packs"  # earlier router layout; managed links found here are removed
 PACK_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
@@ -94,10 +95,6 @@ def is_within(child, parent) -> bool:
     return c == p or c.startswith(p.rstrip("\\/") + os.sep)
 
 
-def is_link(p: Path) -> bool:
-    return os.path.isjunction(p) or os.path.islink(p)
-
-
 class Stores:
     """Where link targets live: the skill store, plus the folder of generated
     pack routers. Either one counts as "ours" for links."""
@@ -135,14 +132,6 @@ def classify(entry: Path, store) -> str:
             return "managed"
         return "foreign"
     return "own"
-
-
-def make_junction(src: Path, dst: Path) -> None:
-    if sys.platform == "win32":
-        import _winapi
-        _winapi.CreateJunction(str(src), str(dst))
-    else:  # used only by tests on other systems
-        os.symlink(src, dst, target_is_directory=True)
 
 
 def safe_unlink(entry: Path, store) -> None:
@@ -254,9 +243,9 @@ def desired(data: dict, folder) -> dict[str, list[str]]:
     return out
 
 
-def hidden(data: dict, folder) -> dict[str, list[str]]:
-    """Skills reached only through a router: linked into <folder>/.skill-packs,
-    which agents do not scan for skills."""
+def routed(data: dict, folder) -> dict[str, list[str]]:
+    """Skills a folder reaches only through a pack router ("instead" mode).
+    They are not linked into the project: they live inside the router."""
     out: dict[str, list[str]] = {}
     for name in packs_of(data, folder):
         p = data["packs"][name]
@@ -284,27 +273,27 @@ def plan(data: dict, folder, store) -> dict:
     """Links to add and remove so the folder matches packs.json."""
     stores = store if isinstance(store, Stores) else Stores(store)
     folder = Path(folder)
-    want, hide = desired(data, folder), hidden(data, folder)
-    res = {"folder": str(folder), "add": [], "remove": [], "conflicts": [], "missing": [], "warnings": []}
+    want = desired(data, folder)
+    res = {"folder": str(folder), "add": [], "remove": [], "conflicts": [], "missing": [], "warnings": [],
+           "routed": sorted(routed(data, folder))}
     if not folder.is_dir():
         res["warnings"].append("folder does not exist; nothing will be linked")
         return res
     have = actual(folder, stores)
-    for names, rels in ((want, SKILL_DIRS), (hide, (HIDDEN_DIR,))):
-        for s in sorted(names):
-            if not stores.exists(s):
-                if s not in res["missing"]:
-                    res["missing"].append(s)
-                continue
-            for rel in rels:
-                kind = have.get(s, {}).get(rel)
-                if kind is None:
-                    res["add"].append([rel, s, str(stores.src(s))])
-                elif kind != "managed":
-                    res["conflicts"].append([rel, s, kind])
+    for s in sorted(want):
+        if not stores.exists(s):
+            res["missing"].append(s)
+            continue
+        for rel in SKILL_DIRS:
+            kind = have.get(s, {}).get(rel)
+            if kind is None:
+                res["add"].append([rel, s, str(stores.src(s))])
+            elif kind != "managed":
+                res["conflicts"].append([rel, s, kind])
     for s, places in sorted(have.items()):
         for rel, kind in places.items():
-            wanted = s in hide if rel == HIDDEN_DIR else s in want
+            # links in .skill-packs/ came from an earlier router layout: always cleaned up
+            wanted = rel != HIDDEN_DIR and s in want
             if kind == "managed" and not wanted:
                 res["remove"].append([rel, s])
     return res
@@ -586,32 +575,49 @@ class Model:
         return [{"name": s, "description": (info.get(s) or {}).get("description", "")}
                 for s in data["packs"][pack]["skills"]]
 
-    def write_router(self, data: dict, pack: str, args: dict) -> None:
-        """Write <pack>-router from args (an edited draft) or from saved meta.
+    def write_router(self, data: dict, pack: str, args: dict) -> bool:
+        """Write <pack>-pack from args (an edited draft) or from its saved meta,
+        and mirror the pack's skills into its references/ folder.
 
-        A template router that was never edited is fully regenerated; an edited
-        or AI-written one keeps its description and lines, gets template lines
-        for new skills, and is marked stale so the UI can offer a rewrite."""
+        The index lists each skill's own description unless the user wrote an
+        override ("routing"); overrides equal to the description are dropped.
+        A template description that was never edited is regenerated; an edited
+        or AI-written one is kept and marked stale when the skill set changes.
+        Returns True when a file changed."""
         p = data["packs"][pack]
         mode = (router_of(p) or {}).get("mode", "instead")
         skills = self.router_skills(data, pack)
         names = [s["name"] for s in skills]
+        descs = {s["name"]: router.one_line(s["description"]) for s in skills}
         meta = self.routers.meta(pack)
+        meta.pop("saved_at", None)
         if args.get("description") is not None:
             meta = {"description": args["description"], "routing": args.get("routing") or {},
                     "note": args.get("note", ""), "writer": args.get("writer", "template"),
                     "edited": bool(args.get("edited")), "skills": names}
         elif not meta or (meta.get("writer") == "template" and not meta.get("edited")):
-            meta = {**router.template(pack, skills), "note": meta.get("note", ""), "writer": "template",
-                    "edited": False, "skills": names}
+            meta = {**router.template(pack, skills), "note": meta.get("note", ""),
+                    "routing": meta.get("routing", {}), "writer": "template", "edited": False, "skills": names}
         else:
             if set(meta.get("skills", [])) != set(names):
                 meta["stale"] = True
             meta["skills"] = names
-        base = router.template(pack, skills)["routing"]
-        meta["routing"] = {n: (meta.get("routing") or {}).get(n) or base[n] for n in names}
-        text = router.render(pack, mode, meta["description"], meta["routing"], names, meta.get("note", ""))
-        self.routers.save(pack, text, {**meta, "pack": pack, "mode": mode})
+        meta["routing"] = {n: router.one_line(v) for n, v in (meta.get("routing") or {}).items()
+                           if n in descs and router.one_line(v) and router.one_line(v) != descs[n]}
+        changed = self.routers.sync_refs(pack, names, self.store)
+        entries = [(n, meta["routing"].get(n) or descs[n] or n) for n in names]
+        text = router.render(pack, mode, meta["description"], entries, meta.get("note", ""))
+        return self.routers.save(pack, text, {**meta, "pack": pack, "mode": mode}) or changed
+
+    def refresh_routers(self, data: dict) -> None:
+        """Keep routers in step with skills updated in the store (their
+        <name>.md copies and index descriptions). Writes only what changed."""
+        for name, p in data["packs"].items():
+            if router_of(p):
+                try:
+                    self.write_router(data, name, {})
+                except OSError as e:
+                    print(f"router {name}: {e}")
 
     def router_info(self, data: dict, pack: str) -> dict:
         r = router_of(data["packs"][pack]) or {}
@@ -619,6 +625,8 @@ class Model:
         return {"enabled": bool(r), "mode": r.get("mode", "instead"), "exists": self.routers.read(pack) is not None,
                 "writer": meta.get("writer"), "edited": bool(meta.get("edited")), "stale": bool(meta.get("stale")),
                 "description": meta.get("description", ""), "routing": meta.get("routing", {}),
+                "descriptions": {s["name"]: router.one_line(s["description"])
+                                 for s in self.router_skills(data, pack)} if r else {},
                 "note": meta.get("note", ""), "name": router_name(pack)}
 
     # ---------------------------------------------------------------- views
@@ -649,7 +657,7 @@ class Model:
 
     def folder_view(self, data: dict, folder: str, catalog: mcp.Catalog | None = None) -> dict:
         f = Path(folder)
-        want, hide = desired(data, f), hidden(data, f)
+        want, hide = desired(data, f), routed(data, f)
         have = actual(f, self.stores) if f.is_dir() else {}
         skills = []
         for s in sorted(set(want) | set(hide) | set(have)):
@@ -661,8 +669,7 @@ class Model:
                 if any(k != "managed" for k in places.values()):
                     status = "conflict"
             elif s in hide:
-                h = all_places.get(HIDDEN_DIR)
-                status = "routed" if h == "managed" else "conflict" if h else "missing"
+                status = "routed" if self.stores.exists(s) else "missing"
             elif managed or all_places.get(HIDDEN_DIR) == "managed":
                 status = "stray"
             else:
@@ -706,6 +713,8 @@ class Model:
 
     def state(self) -> dict:
         data = self.load()
+        with self.lock:
+            self.refresh_routers(data)
         catalog = self.mcp_catalog()
         folders = []
         for path in all_folders(data):

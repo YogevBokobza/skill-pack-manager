@@ -77,6 +77,27 @@ def app_browser() -> list[str] | None:
     return None
 
 
+def is_link(p) -> bool:
+    return os.path.isjunction(p) or os.path.islink(p)
+
+
+def make_junction(src: Path, dst: Path) -> None:
+    """A directory link: a junction on Windows (no admin rights needed), a symlink elsewhere."""
+    if WINDOWS:
+        import _winapi
+        _winapi.CreateJunction(str(src), str(dst))
+    else:
+        os.symlink(src, dst, target_is_directory=True)
+
+
+def unlink_link(p) -> None:
+    """Remove a link itself, never its target."""
+    if os.path.isjunction(p):
+        os.rmdir(p)
+    else:
+        os.unlink(p)
+
+
 def process_running(names: tuple[str, ...]) -> bool:
     """True when a process with one of these executable names runs (case-insensitive)."""
     if os.environ.get("SPM_IGNORE_PROCESSES"):  # tests and demos

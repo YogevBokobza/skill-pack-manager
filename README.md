@@ -32,7 +32,8 @@ in which folder and for which agent. Nothing happens until you press Apply.
   skills or MCP servers to one folder only.
 - **Pack routers.** One generated skill (`<pack>-pack`) that stands in for a
   whole pack: agents see one description instead of one per skill, and the
-  router tells them which skill's `SKILL.md` to read. Written from a template,
+  router's index tells them which skill to read (the index-skill pattern of
+  Unity's agent plugin). Written from a template,
   or by AI through your Claude Code or Codex subscription or an API key.
 - **Status per folder.** Each skill and MCP server shows whether it is in place
   for every agent, missing, conflicting with a project file, or left over. One
@@ -170,29 +171,62 @@ Agents load the description of every skill they can see into every session. A
 pack of twenty skills costs twenty descriptions, even in a session that needs
 none of them. A router replaces them with one.
 
-In a pack, click **Create router…**. The editor fills in a description and one
-"use when" line per skill from the skills' own descriptions; edit them, or click
-**Write** to have them written by AI (see below). The router is saved as a skill
-named `<pack>-pack` in the app's data folder (`routers/`), and every folder with
-the pack gets it.
+The layout follows the index-skill pattern of Unity's agent plugin
+([`using-unity`](https://github.com/Unity-Technologies/unity-agent-plugin/blob/main/skills/using-unity/SKILL.md)):
+one listed skill whose body indexes the others, which live inside its own
+folder.
+
+```
+<data folder>/routers/web-pack/
+  SKILL.md                                  the index
+  references/frontend-design/
+    frontend-design.md                      copy of the skill's SKILL.md
+    references/  scripts/ ...               links to the skill's own folders
+  references/webapp-testing/ ...
+```
+
+The router's `SKILL.md` has:
+
+- a **description** in the pattern "Index of the web pack's skills, with every
+  skill's description and file. Make sure to use this skill for any web task,
+  from ... to ..., including advice questions, before writing code or
+  answering." It is the only text the agent sees before opening the router, so
+  it names every topic in the pack;
+- **Step 1: pick one skill**, the one whose description fits the whole request;
+- **Step 2: read it and follow it**, with paths relative to the router's folder,
+  and a skill's own relative paths (`scripts/...`, `<SKILL_DIR>`) meaning that
+  skill's folder;
+- **skills that name other skills**: every skill in the index is installed, so a
+  skill that says "use the X skill" reads X's file from the index;
+- an **index, A to Z**: each skill's own description and its file,
+  `references/<name>/<name>.md`.
+
+Each skill's `SKILL.md` is copied as `<name>.md` so agents that scan for
+`SKILL.md` files recursively still list only the router. The copies and the
+index follow the store: update a skill and the router picks it up.
+
+In a pack, click **Create router…**. The editor fills in the description from a
+template; click **Write** to have it written by AI (see below), or edit it. The
+index entry of each skill starts as the skill's own description; change one only
+to add something the description doesn't say. The router is saved as a skill
+named `<pack>-pack`, and every folder with the pack gets it.
 
 Each pack chooses a mode:
 
 | Mode | What a project gets |
 |---|---|
-| **Instead of the skills** (default) | Only the router in `.claude/skills`, `.opencode/skills` and `.agents/skills`. The pack's skills are linked into `<project>/.skill-packs/`, which agents do not scan; the router points to `.skill-packs/<skill>/SKILL.md`. Saves the tokens; the skills can only be reached through the router, not by name. |
-| **Alongside the skills** | The router plus every skill, as without a router. Helps the agent choose; no savings. |
+| **Instead of the skills** (default) | Only the router in `.claude/skills`, `.opencode/skills` and `.agents/skills`. The skills are reached through its index. Saves the tokens; the skills can't be called by name on their own. |
+| **Alongside the skills** | The router plus every skill. Helps the agent choose; no savings. |
 
-The router keeps up with the pack: adding or removing a skill updates its table.
-A router written by the template is regenerated completely; one you edited or
-had written by AI keeps its text, and the pack view marks its description as out
-of date so you can rewrite it.
+Adding or removing a skill in the pack updates the router. A description written
+by the template is regenerated; one you edited or had written by AI is kept, and
+the pack view marks it out of date so you can rewrite it.
 
 **AI writers** (Settings → *Writing pack routers*): Claude Code CLI or Codex CLI
 use your subscription (they run with no tools, in an empty folder); Anthropic
 or OpenAI use an API key you save in Settings. The writer receives only the
-pack's skill names and descriptions and must answer with a description and one
-line per skill as JSON; the app builds the router file itself.
+pack's skill names and descriptions and must answer with the description as
+JSON; the app builds the router file itself.
 
 ### Statuses in a folder
 
@@ -203,7 +237,7 @@ line per skill as JSON; the app builds the router file itself.
 | name conflict | The project has its own folder or link with that name. Left alone |
 | linked, no pack wants it | A link from this app that nothing asks for. **Sync** removes it |
 | project's own skill | A real folder in the project. Never touched |
-| behind the router | In `.skill-packs/`, reached through the pack's router |
+| behind the router | Inside the pack's router, reached through its index |
 
 MCP servers use the same states ("configured" instead of "linked"), with a
 column per agent.
@@ -302,7 +336,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 78 tests, Windows, macOS and Linux
+python -m unittest -v           # 80 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

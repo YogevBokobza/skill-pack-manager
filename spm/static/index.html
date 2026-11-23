@@ -211,13 +211,15 @@ function showPreview(res, title) {
   const body = $("mbody"); fill(body, h("h2", {}, title));
   for (const w of res.warnings) body.append(h("p", { class: "b-warn" }, w));
   for (const p of res.plans) {
-    // links in .skill-packs/ are skills behind a pack router; agents do not list them
+    // links in .skill-packs/ come from an earlier router layout and are only removed;
+    // skills behind a router now live inside it (p.routed lists them)
     const HID = ".skill-packs";
     const vis = l => skillsOf(l.filter(x => x[0] !== HID)), hid = l => skillsOf(l.filter(x => x[0] === HID));
     const addV = vis(p.add), addH = hid(p.add), remV = vis(p.remove), remH = hid(p.remove);
-    const behind = addH.filter(s => remV.includes(s)), back = remH.filter(s => addV.includes(s));
+    const routedNow = p.routed || [];
+    const behind = remV.filter(s => routedNow.includes(s)), back = remH.filter(s => addV.includes(s));
     const add = addV.filter(s => !back.includes(s)), rem = remV.filter(s => !behind.includes(s));
-    const addHid = addH.filter(s => !behind.includes(s)), remHid = remH.filter(s => !back.includes(s));
+    const addHid = addH, remHid = remH.filter(s => !back.includes(s));
     const box = h("div", { class: "plan" }, h("div", { class: "f" }, p.folder));
     const ul = h("ul");
     if (add.length) ul.append(h("li", { class: "b-ok" }, `link ${plural(add.length, "skill")}: ${add.join(", ")}`));
@@ -225,7 +227,7 @@ function showPreview(res, title) {
     if (behind.length) ul.append(h("li", { class: "b-info" }, `move behind the router (agents stop listing them): ${behind.join(", ")}`));
     if (back.length) ul.append(h("li", { class: "b-info" }, `bring back from behind the router: ${back.join(", ")}`));
     if (addHid.length) ul.append(h("li", { class: "b-ok" }, `add behind the router: ${addHid.join(", ")}`));
-    if (remHid.length) ul.append(h("li", { class: "b-bad" }, `remove from behind the router: ${remHid.join(", ")}`));
+    if (remHid.length) ul.append(h("li", { class: "b-bad" }, `clean up old .skill-packs links: ${remHid.join(", ")}`));
     for (const c of p.conflicts) ul.append(h("li", { class: "b-warn" }, `${c[0]}/${c[1]}: the project has its own ${c[2] === "own" ? "folder" : "link"} with this name, left as is`));
     if (p.missing.length) ul.append(h("li", { class: "b-warn" }, `not in the store, skipped: ${p.missing.join(", ")}`));
     for (const w of p.warnings) ul.append(h("li", { class: "b-warn" }, w));
@@ -510,7 +512,7 @@ function routerSection(p) {
     h("div", { class: "muted", style: "font-size:12px; margin:6px 0 10px" }, r.description),
     h("div", { class: "row" }, seg,
       h("span", { class: "muted", style: "font-size:12px" }, r.mode === "instead"
-        ? "Projects get only the router; the skills sit in .skill-packs/ where agents don't list them."
+        ? "Projects get only the router; the skills live inside it (references/), so agents list one skill."
         : "Projects get the router and every skill.")),
     h("div", { class: "row", style: "margin-top:8px" },
       h("span", { class: "badge" }, WRITER_LABEL[r.writer] || r.writer || "template"),
@@ -520,12 +522,12 @@ function routerSection(p) {
 
 async function editRouter(p) {
   const r = p.router;
-  let draft = r.enabled ? { description: r.description, routing: r.routing, writer: r.writer || "template" } : null;
+  let draft = r.enabled ? { description: r.description, routing: r.routing, descriptions: r.descriptions, writer: r.writer || "template" } : null;
   await guard(async () => {
     if (!draft) draft = await api("/api/router/draft", { pack: p.name, writer: "template" });
   });
   if (!draft) return;
-  const snapshot = (d, routing) => JSON.stringify([d.trim(), p.skills.map(s => (routing[s] || "").trim())]);
+  const snapshot = (d, routing) => JSON.stringify([d.trim(), p.skills.map(s => (routing[s] || (draft.descriptions || {})[s] || "").trim())]);
   let generated = snapshot(draft.description, draft.routing || {});
   const mode = r.enabled ? r.mode : "instead";
   const modeSel = h("select", {}, h("option", { value: "instead", selected: mode === "instead" }, "Instead of the skills (saves tokens)"),
@@ -541,7 +543,8 @@ async function editRouter(p) {
   })));
   const note = h("textarea", { rows: 2, style: "width:100%", placeholder: "optional: extra guidance for the agent, e.g. which skill to prefer" });
   note.value = r.note || "";
-  const setFields = d => { desc.value = d.description; for (const s of p.skills) lines[s].value = (d.routing || {})[s] || ""; upd(); };
+  const descs = draft.descriptions || {};
+  const setFields = d => { desc.value = d.description; for (const s of p.skills) lines[s].value = (d.routing || {})[s] || descs[s] || ""; upd(); };
   setFields(draft);
   const writerSel = h("select", {}, ...writersAvailable().map(w => h("option", { value: w, selected: w === S.state.settings.ai.writer }, WRITER_LABEL[w])));
   let writer = draft.writer || "template";
@@ -554,12 +557,13 @@ async function editRouter(p) {
     } finally { genBtn.disabled = false; genBtn.textContent = "Write"; }
   }) }, "Write");
   const result = await openModal(`${r.enabled ? "Edit" : "Create"} router for ${p.name}`, [
-    h("p", { class: "muted" }, `The router is a skill named ${p.name}-pack. Agents decide from its description whether to open it, so name the tasks and words a user would type.`),
+    h("p", { class: "muted" }, `The router is an index skill named ${p.name}-pack. Agents decide from its description whether to open it, so name the tasks and the words a user would type. Its index lists every skill A to Z with its description; it then tells the agent to read the one that fits and follow it.`),
     h("label", { class: "field" }, "Mode", modeSel),
     h("div", { class: "row", style: "margin-bottom:10px" }, h("span", { class: "muted", style: "font-size:12px" }, "Write the text with:"), writerSel, genBtn,
       writersAvailable().length === 1 ? h("span", { class: "muted", style: "font-size:12px" }, "Add an API key or install the Claude/Codex CLI to write with AI (Settings).") : null),
     h("label", { class: "field" }, h("span", { class: "row" }, "Description ", count), desc),
-    h("h3", {}, "When to use each skill"), table,
+    h("h3", {}, "Index entry for each skill"),
+    h("p", { class: "muted", style: "font-size:12px" }, "Starts as the skill's own description and follows it when the skill is updated. Change a line only to say something the description doesn't."), table,
     h("label", { class: "field", style: "margin-top:10px" }, "Note", note),
   ], [{ label: "Cancel" }, { label: "Save router", primary: true, run: async () => {
     if (!desc.value.trim()) throw new Error("The description cannot be empty");
