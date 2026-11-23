@@ -210,11 +210,21 @@ function showPreview(res, title) {
   const body = $("mbody"); fill(body, h("h2", {}, title));
   for (const w of res.warnings) body.append(h("p", { class: "b-warn" }, w));
   for (const p of res.plans) {
-    const add = skillsOf(p.add), rem = skillsOf(p.remove);
+    // links in .skill-packs/ are skills behind a pack router; agents do not list them
+    const HID = ".skill-packs";
+    const vis = l => skillsOf(l.filter(x => x[0] !== HID)), hid = l => skillsOf(l.filter(x => x[0] === HID));
+    const addV = vis(p.add), addH = hid(p.add), remV = vis(p.remove), remH = hid(p.remove);
+    const behind = addH.filter(s => remV.includes(s)), back = remH.filter(s => addV.includes(s));
+    const add = addV.filter(s => !back.includes(s)), rem = remV.filter(s => !behind.includes(s));
+    const addHid = addH.filter(s => !behind.includes(s)), remHid = remH.filter(s => !back.includes(s));
     const box = h("div", { class: "plan" }, h("div", { class: "f" }, p.folder));
     const ul = h("ul");
     if (add.length) ul.append(h("li", { class: "b-ok" }, `link ${plural(add.length, "skill")}: ${add.join(", ")}`));
     if (rem.length) ul.append(h("li", { class: "b-bad" }, `unlink ${plural(rem.length, "skill")}: ${rem.join(", ")}`));
+    if (behind.length) ul.append(h("li", { class: "b-info" }, `move behind the router (agents stop listing them): ${behind.join(", ")}`));
+    if (back.length) ul.append(h("li", { class: "b-info" }, `bring back from behind the router: ${back.join(", ")}`));
+    if (addHid.length) ul.append(h("li", { class: "b-ok" }, `add behind the router: ${addHid.join(", ")}`));
+    if (remHid.length) ul.append(h("li", { class: "b-bad" }, `remove from behind the router: ${remHid.join(", ")}`));
     for (const c of p.conflicts) ul.append(h("li", { class: "b-warn" }, `${c[0]}/${c[1]}: the project has its own ${c[2] === "own" ? "folder" : "link"} with this name, left as is`));
     if (p.missing.length) ul.append(h("li", { class: "b-warn" }, `not in the store, skipped: ${p.missing.join(", ")}`));
     for (const w of p.warnings) ul.append(h("li", { class: "b-warn" }, w));
@@ -350,6 +360,7 @@ const mcpAdder = (label, onAdd) => adder("mcplist", "MCP server name", label, on
 const STATUS = {
   ok: ["linked", "b-ok"], missing: ["not linked yet", "b-warn"], partial: ["partly linked", "b-warn"],
   conflict: ["name conflict", "b-bad"], stray: ["linked, no pack wants it", "b-warn"], own: ["project's own skill", "b-info"],
+  routed: ["behind the router", "b-info"],
 };
 const MSTATUS = {
   ok: ["configured", "b-ok"], missing: ["not configured yet", "b-warn"], partial: ["partly configured", "b-warn"],
@@ -449,6 +460,7 @@ function renderPacks() {
   fill(d, 
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, p.name),
       h("button", { class: "btn danger", onclick: () => op("delete_pack", { pack: p.name }, `Delete pack ${p.name}`).then(() => { if (!S.state.packs.some(x => x.name === p.name)) { S.pack = null; render(); } }) }, "Delete pack")),
+    routerSection(p),
     h("h3", {}, `Folders (${p.paths.length})`),
     ...p.paths.map(f => h("div", { class: "row", style: "margin-bottom:6px" },
       h("span", { style: "flex:1; word-break:break-all" }, f),
@@ -469,6 +481,112 @@ function renderPacks() {
     h("table", { style: "margin-top:10px" }, h("tbody", {}, ...p.skills.map(s => h("tr", {},
       h("td", { style: "white-space:nowrap" }, s), h("td", { class: "desc" }, (desc[s] || "not in store").slice(0, 180)),
       h("td", {}, h("button", { class: "btn danger", onclick: () => op("pack_remove_skill", { pack: p.name, skill: s }, `Remove ${s} from ${p.name}`) }, "Remove")))))));
+}
+
+// Routers ---------------------------------------------------------------
+const WRITER_LABEL = { "template": "Template (offline)", "claude-cli": "Claude Code (your subscription)",
+  "codex-cli": "Codex (your subscription)", "anthropic": "Anthropic API key", "openai": "OpenAI API key" };
+function writersAvailable() {
+  const ai = S.state.settings.ai;
+  return Object.keys(WRITER_LABEL).filter(w => w === "template" || ai.clis[w] || ai.keys[w]);
+}
+
+function routerSection(p) {
+  const r = p.router;
+  if (!r.enabled) {
+    return h("div", { class: "card", style: "margin-top:16px" },
+      h("div", { class: "row" }, h("div", { style: "flex:1" }, h("b", {}, "Router"),
+        h("div", { class: "muted", style: "font-size:12px; margin-top:4px" },
+          `One skill, ${p.name}-pack, that stands in for the whole pack: agents see one description instead of ${p.skills.length}, and the router tells them which skill to read.`)),
+        h("button", { class: "btn primary", disabled: !p.skills.length, onclick: () => editRouter(p) }, "Create router…")));
+  }
+  const seg = h("div", { class: "seg" }, ...[["instead", "Instead of the skills"], ["alongside", "Alongside the skills"]].map(([k, l]) =>
+    h("button", { "aria-pressed": String(r.mode === k), onclick: () => r.mode === k ? null : op("router_set", { pack: p.name, mode: k }, `Router mode: ${l.toLowerCase()}`) }, l)));
+  return h("div", { class: "card", style: "margin-top:16px" },
+    h("div", { class: "row" }, h("b", { style: "flex:1" }, "Router: ", h("code", {}, r.name)),
+      h("button", { class: "btn", onclick: () => editRouter(p) }, "Edit…"),
+      h("button", { class: "btn danger", onclick: () => op("router_remove", { pack: p.name }, `Remove router of ${p.name}`) }, "Remove")),
+    h("div", { class: "muted", style: "font-size:12px; margin:6px 0 10px" }, r.description),
+    h("div", { class: "row" }, seg,
+      h("span", { class: "muted", style: "font-size:12px" }, r.mode === "instead"
+        ? "Projects get only the router; the skills sit in .skill-packs/ where agents don't list them."
+        : "Projects get the router and every skill.")),
+    h("div", { class: "row", style: "margin-top:8px" },
+      h("span", { class: "badge" }, WRITER_LABEL[r.writer] || r.writer || "template"),
+      r.edited ? h("span", { class: "badge" }, "edited by hand") : null,
+      r.stale ? h("span", { class: "badge b-warn", title: "Skills were added or removed since the description was written" }, "description out of date") : null));
+}
+
+async function editRouter(p) {
+  const r = p.router;
+  let draft = r.enabled ? { description: r.description, routing: r.routing, writer: r.writer || "template" } : null;
+  await guard(async () => {
+    if (!draft) draft = await api("/api/router/draft", { pack: p.name, writer: "template" });
+  });
+  if (!draft) return;
+  const snapshot = (d, routing) => JSON.stringify([d.trim(), p.skills.map(s => (routing[s] || "").trim())]);
+  let generated = snapshot(draft.description, draft.routing || {});
+  const mode = r.enabled ? r.mode : "instead";
+  const modeSel = h("select", {}, h("option", { value: "instead", selected: mode === "instead" }, "Instead of the skills (saves tokens)"),
+    h("option", { value: "alongside", selected: mode === "alongside" }, "Alongside the skills"));
+  const desc = h("textarea", { rows: 5, style: "width:100%", maxlength: "1024" });
+  const count = h("span", { class: "muted", style: "font-size:12px" });
+  const upd = () => { count.textContent = `${desc.value.length} / 1024`; };
+  desc.addEventListener("input", upd);
+  const lines = {};
+  const table = h("table", {}, h("tbody", {}, ...p.skills.map(s => {
+    lines[s] = h("input", { style: "width:100%" });
+    return h("tr", {}, h("td", { style: "white-space:nowrap; width:1%" }, h("b", {}, s)), h("td", {}, lines[s]));
+  })));
+  const note = h("textarea", { rows: 2, style: "width:100%", placeholder: "optional: extra guidance for the agent, e.g. which skill to prefer" });
+  note.value = r.note || "";
+  const setFields = d => { desc.value = d.description; for (const s of p.skills) lines[s].value = (d.routing || {})[s] || ""; upd(); };
+  setFields(draft);
+  const writerSel = h("select", {}, ...writersAvailable().map(w => h("option", { value: w, selected: w === S.state.settings.ai.writer }, WRITER_LABEL[w])));
+  let writer = draft.writer || "template";
+  const genBtn = h("button", { class: "btn", onclick: () => guard(async () => {
+    genBtn.disabled = true; genBtn.textContent = "Writing…";
+    try {
+      const d = await api("/api/router/draft", { pack: p.name, writer: writerSel.value });
+      setFields(d); writer = d.writer; generated = snapshot(d.description, d.routing);
+      toast(`Written with: ${WRITER_LABEL[d.writer]}`);
+    } finally { genBtn.disabled = false; genBtn.textContent = "Write"; }
+  }) }, "Write");
+  const result = await openModal(`${r.enabled ? "Edit" : "Create"} router for ${p.name}`, [
+    h("p", { class: "muted" }, `The router is a skill named ${p.name}-pack. Agents decide from its description whether to open it, so name the tasks and words a user would type.`),
+    h("label", { class: "field" }, "Mode", modeSel),
+    h("div", { class: "row", style: "margin-bottom:10px" }, h("span", { class: "muted", style: "font-size:12px" }, "Write the text with:"), writerSel, genBtn,
+      writersAvailable().length === 1 ? h("span", { class: "muted", style: "font-size:12px" }, "Add an API key or install the Claude/Codex CLI to write with AI (Settings).") : null),
+    h("label", { class: "field" }, h("span", { class: "row" }, "Description ", count), desc),
+    h("h3", {}, "When to use each skill"), table,
+    h("label", { class: "field", style: "margin-top:10px" }, "Note", note),
+  ], [{ label: "Cancel" }, { label: "Save router", primary: true, run: async () => {
+    if (!desc.value.trim()) throw new Error("The description cannot be empty");
+    const routing = Object.fromEntries(p.skills.map(s => [s, lines[s].value.trim()]));
+    const edited = snapshot(desc.value, routing) !== generated;
+    return { pack: p.name, mode: modeSel.value, description: desc.value.trim(), routing, note: note.value, writer, edited };
+  } }], true);
+  if (result && result.pack) await op("router_set", result, `Save router ${p.name}-pack`);
+}
+
+function aiSettings(ai) {
+  const writer = h("select", {}, ...Object.keys(WRITER_LABEL).map(w => h("option", { value: w, selected: w === ai.writer }, WRITER_LABEL[w])));
+  writer.addEventListener("change", () => guard(async () => { await api("/api/settings", { ai: { writer: writer.value } }); await refresh(); }));
+  const keyRow = name => {
+    const inp = h("input", { type: "password", placeholder: ai.keys[name] ? "saved (hidden)" : "paste the key", style: "width:260px" });
+    const model = h("input", { placeholder: ai.default_models[name], value: ai.models[name] || "", style: "width:180px" });
+    return h("div", { class: "row", style: "margin-bottom:6px" }, h("span", { style: "width:150px" }, WRITER_LABEL[name]), inp,
+      h("button", { class: "btn", onclick: () => guard(async () => { await api("/api/secret", { name, value: inp.value }); await api("/api/settings", { ai: { models: { [name]: model.value } } }); toast("Saved"); await refresh(); }) }, "Save"),
+      ai.keys[name] ? h("button", { class: "btn danger", onclick: () => guard(async () => { await api("/api/secret", { name, value: "" }); await refresh(); }) }, "Delete key") : null,
+      h("span", { class: "muted", style: "font-size:12px" }, "model:"), model);
+  };
+  return h("div", {},
+    h("h3", {}, "Writing pack routers"),
+    h("p", { class: "muted", style: "font-size:12px" }, "The template works offline. An AI writer gets the pack's skill names and descriptions and returns only a description and one line per skill; the program builds the router file itself."),
+    h("div", { class: "row", style: "margin-bottom:10px" }, h("span", {}, "Default writer"), writer,
+      h("span", { class: "muted", style: "font-size:12px" }, `Claude Code CLI: ${ai.clis["claude-cli"] ? "found" : "not found"} · Codex CLI: ${ai.clis["codex-cli"] ? "found" : "not found"}`)),
+    keyRow("anthropic"), keyRow("openai"),
+    h("p", { class: "muted", style: "font-size:12px" }, "Keys are stored in the data folder (owner-only on macOS and Linux) and never shown again."));
 }
 
 // Skills ----------------------------------------------------------------
@@ -785,6 +903,7 @@ function renderSettings() {
     roots,
     h("div", { class: "row" }, h("button", { class: "btn", onclick: () => guard(async () => { const r = await api("/api/pick-folder", {}); if (r.folder) saveRoots([...set.scan_roots, r.folder]); }) }, "Choose folder…"),
       addRoot, h("button", { class: "btn", onclick: () => addRoot.value.trim() && saveRoots([...set.scan_roots, addRoot.value.trim()]) }, "Add")),
+    aiSettings(set.ai),
     h("h3", {}, "Files"),
     h("table", {}, h("tbody", {},
       ...[["Packs", st.config.packs], ["Skill store", st.config.store], ["Data folder (settings, catalog, backups, log)", st.config.data]].map(([k, v]) =>

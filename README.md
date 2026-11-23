@@ -30,6 +30,10 @@ in which folder and for which agent. Nothing happens until you press Apply.
 
 - **Packs per project.** Create packs, attach them to folders, add single extra
   skills or MCP servers to one folder only.
+- **Pack routers.** One generated skill (`<pack>-pack`) that stands in for a
+  whole pack: agents see one description instead of one per skill, and the
+  router tells them which skill's `SKILL.md` to read. Written from a template,
+  or by AI through your Claude Code or Codex subscription or an API key.
 - **Status per folder.** Each skill and MCP server shows whether it is in place
   for every agent, missing, conflicting with a project file, or left over. One
   click syncs a folder that drifted.
@@ -155,6 +159,36 @@ MCP servers. You can run the migration again later to pick up anything new.
 7. **Keep it current.** **Check for updates** in **Skills**, and **Version…** on
    a skill to move to another branch or tag.
 
+### Pack routers
+
+Agents load the description of every skill they can see into every session. A
+pack of twenty skills costs twenty descriptions, even in a session that needs
+none of them. A router replaces them with one.
+
+In a pack, click **Create router…**. The editor fills in a description and one
+"use when" line per skill from the skills' own descriptions; edit them, or click
+**Write** to have them written by AI (see below). The router is saved as a skill
+named `<pack>-pack` in the app's data folder (`routers/`), and every folder with
+the pack gets it.
+
+Each pack chooses a mode:
+
+| Mode | What a project gets |
+|---|---|
+| **Instead of the skills** (default) | Only the router in `.claude/skills`, `.opencode/skills` and `.agents/skills`. The pack's skills are linked into `<project>/.skill-packs/`, which agents do not scan; the router points to `.skill-packs/<skill>/SKILL.md`. Saves the tokens; the skills can only be reached through the router, not by name. |
+| **Alongside the skills** | The router plus every skill, as without a router. Helps the agent choose; no savings. |
+
+The router keeps up with the pack: adding or removing a skill updates its table.
+A router written by the template is regenerated completely; one you edited or
+had written by AI keeps its text, and the pack view marks its description as out
+of date so you can rewrite it.
+
+**AI writers** (Settings → *Writing pack routers*): Claude Code CLI or Codex CLI
+use your subscription (they run with no tools, in an empty folder); Anthropic
+or OpenAI use an API key you save in Settings. The writer receives only the
+pack's skill names and descriptions and must answer with a description and one
+line per skill as JSON; the app builds the router file itself.
+
 ### Statuses in a folder
 
 | Skill status | Meaning |
@@ -164,6 +198,7 @@ MCP servers. You can run the migration again later to pick up anything new.
 | name conflict | The project has its own folder or link with that name. Left alone |
 | linked, no pack wants it | A link from this app that nothing asks for. **Sync** removes it |
 | project's own skill | A real folder in the project. Never touched |
+| behind the router | In `.skill-packs/`, reached through the pack's router |
 
 MCP servers use the same states ("configured" instead of "linked"), with a
 column per agent.
@@ -262,7 +297,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 63 tests, Windows, macOS and Linux
+python -m unittest -v           # 74 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

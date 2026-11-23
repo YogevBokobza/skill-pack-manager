@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import threading
 import time
 import traceback
@@ -16,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import mcp, migrate, repo
+from . import mcp, migrate, repo, router
 from .core import Config, Model, OpError, UnsafeRemoval
 from .mcp import McpError
 from .osinfo import WINDOWS, MACOS, data_dir, open_path
@@ -24,7 +25,8 @@ from .settings import Settings
 from .sources import CcSwitchSource, LocalSource, SourceError
 
 STATIC = Path(__file__).with_name("static")
-USER_ERRORS = (OpError, UnsafeRemoval, McpError, SourceError, repo.RepoError, ValueError, KeyError, FileNotFoundError)
+USER_ERRORS = (OpError, UnsafeRemoval, McpError, SourceError, repo.RepoError, router.RouterError, ValueError, KeyError,
+               FileNotFoundError)
 
 
 class App:
@@ -37,6 +39,7 @@ class App:
         self.bye_at = 0.0  # set by the page's pagehide beacon (close or reload)
         self.usage_job = {"running": False, "error": None}
         self.ws = repo.Workspace(self.data_dir / "tmp")
+        self.secrets = router.Secrets(self.data_dir / "secrets.json")
         self.build()
 
     # ------------------------------------------------------------- mode/model
@@ -91,7 +94,13 @@ class App:
         return self.model.state() | {
             "usage": self.model.cached_usage(), "usage_job": self.usage_job,
             "settings": {"mode": s["mode"], "theme": s["theme"], "scan_roots": [str(r) for r in cfg.scan_roots],
-                         "scan_roots_custom": s["scan_roots"] is not None},
+                         "scan_roots_custom": s["scan_roots"] is not None,
+                         "ai": {"writer": (s.get("ai") or {}).get("writer", "template"),
+                                "models": (s.get("ai") or {}).get("models", {}),
+                                "default_models": router.DEFAULT_MODELS,
+                                "keys": {k: bool(v) for k, v in self.secrets.load().items()},
+                                "clis": {"claude-cli": cfg.claude_cli.exists(),
+                                         "codex-cli": bool(shutil.which("codex"))}}},
             "ccswitch_detected": cfg.db.exists(),
             "platform": "windows" if WINDOWS else "macos" if MACOS else "linux",
         }
@@ -134,6 +143,24 @@ class App:
             return {"ok": True}
         if path == "/api/migrate":
             return self.migrate(b)
+        if path == "/api/router/draft":
+            data = m.load()
+            if b["pack"] not in data["packs"]:
+                raise OpError(f"no such pack: {b['pack']!r}")
+            ai = self.settings.load().get("ai") or {}
+            writer = b.get("writer") or ai.get("writer") or "template"
+            skills = m.router_skills(data, b["pack"])
+            if not skills:
+                raise OpError("add skills to the pack first")
+            draft = router.write_with_ai(writer, b["pack"], skills, claude_cli=m.cfg.claude_cli,
+                                         model=(ai.get("models") or {}).get(writer, ""),
+                                         api_key=self.secrets.load().get(writer, ""))
+            return draft | {"writer": writer, "skills": [s["name"] for s in skills]}
+        if path == "/api/secret":
+            if b.get("name") not in ("anthropic", "openai"):
+                raise OpError("unknown key")
+            self.secrets.set(b["name"], (b.get("value") or "").strip() or None)
+            return {"ok": True}
         if path == "/api/usage":
             if not self.usage_job["running"]:
                 self.usage_job.update(running=True, error=None)

@@ -36,6 +36,18 @@ class Settings:
             if body["mode"] not in MODES:
                 raise ValueError(f"mode must be one of {', '.join(MODES)}")
             s["mode"] = body["mode"]
+        if "ai" in body:
+            from .router import WRITERS
+            ai = body["ai"] if isinstance(body["ai"], dict) else {}
+            cur = s.get("ai") if isinstance(s.get("ai"), dict) else {}
+            if "writer" in ai:
+                if ai["writer"] not in WRITERS:
+                    raise ValueError(f"writer must be one of {', '.join(WRITERS)}")
+                cur["writer"] = ai["writer"]
+            for k, v in (ai.get("models") or {}).items():
+                if k in WRITERS and isinstance(v, str) and len(v) < 100:
+                    cur.setdefault("models", {})[k] = v.strip()
+            s["ai"] = cur
         if "scan_roots" in body:
             roots = body["scan_roots"]
             if not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots):
