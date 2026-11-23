@@ -43,6 +43,18 @@ def active(data: dict, folder) -> list[str]:
     return expand(data, direct(data, folder))
 
 
+def brought_by(data: dict, folder) -> dict[str, list[str]]:
+    """Packs a folder gets only through includes -> the attached packs that
+    bring each one."""
+    attached = direct(data, folder)
+    out: dict[str, list[str]] = {}
+    for a in attached:
+        for n in expand(data, [a])[1:]:
+            if n not in attached:
+                out.setdefault(n, []).append(a)
+    return out
+
+
 def including(data: dict, pack: str) -> list[str]:
     """pack and every pack that includes it, directly or through others."""
     return [n for n in data["packs"] if pack in expand(data, [n])]

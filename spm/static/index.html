@@ -115,6 +115,7 @@ body.busy header::after { content: ""; position: absolute; left: 0; bottom: -1px
 @keyframes slide { from { left: -35%; } to { left: 100%; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { body.busy header::after { animation: none; left: 0; width: 100%; opacity: .6; } #busytext::before { animation: none; } }
+.chip.via { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
 .costline { font-size: 12px; color: var(--muted); margin-top: 4px; }
 pre.diff { background: var(--panel2); padding: 8px 10px; border-radius: 6px; max-height: 360px; overflow: auto; font-size: 12px; margin: 6px 0 10px; white-space: pre; }
 pre.diff .add { color: var(--ok); } pre.diff .del { color: var(--bad); } pre.diff .hunk { color: var(--info); }
@@ -365,6 +366,13 @@ function render() {
   ({ folders: renderFolders, packs: renderPacks, skills: renderSkills, mcp: renderMcp, usage: renderUsage, scan: renderScan, settings: renderSettings })[S.tab]();
 }
 
+// a pack the folder gets because an attached pack includes it
+function viaChip(p, from, long) {
+  const by = (from || {})[p] || [];
+  return h("span", { class: "chip via", title: `Included by ${by.join(", ") || "an attached pack"}; detach that pack to remove it` },
+    long && by.length ? `${p} (via ${by.join(", ")})` : `↳ ${p}`);
+}
+
 function statusDot(f) {
   const c = !f.exists ? "var(--muted)" : f.in_sync && !f.counts.conflict ? "var(--ok)" : "var(--warn)";
   const t = !f.exists ? "folder missing" : f.in_sync ? (f.counts.conflict ? "has name conflicts" : "in sync") : "out of sync";
@@ -380,7 +388,7 @@ function listTools(placeholder, extra) {
 // Folders ---------------------------------------------------------------
 function renderFolders() {
   const q = S.filter.toLowerCase();
-  const items = S.state.folders.filter(f => !q || f.folder.toLowerCase().includes(q) || f.packs.join(" ").includes(q));
+  const items = S.state.folders.filter(f => !q || f.folder.toLowerCase().includes(q) || [...f.packs, ...(f.via || [])].join(" ").includes(q));
   fill($("list"), 
     listTools("Filter folders", h("span", { class: "row", style: "flex-wrap:nowrap" },
       S.state.folders.some(f => f.exists && !f.in_sync) ? h("button", { class: "btn", title: "Sync every folder that is out of sync, with one preview", onclick: () => op("sync_all", {}, "Sync all folders") }, "Sync all") : null,
@@ -389,6 +397,7 @@ function renderFolders() {
       h("div", { class: "t" }, statusDot(f), base(f.folder)),
       h("div", { class: "p" }, f.folder),
       h("div", { class: "chips" }, ...f.packs.map(p => h("span", { class: "chip" }, p)),
+        ...(f.via || []).map(p => viaChip(p, f.via_from)),
         f.extras.length ? h("span", { class: "chip" }, `+${f.extras.length} extra`) : null,
         f.mcp.length ? h("span", { class: "chip", title: f.mcp.join(", ") }, `${f.mcp.length} MCP`) : null))),
     items.length ? null : h("div", { class: "empty" }, "No folders"));
@@ -506,7 +515,7 @@ function renderFolderDetail() {
     h("h3", {}, "Packs"),
     h("div", { class: "chips" }, ...v.packs.map(p => h("span", { class: "chip" }, p,
       h("button", { title: "Detach", onclick: () => op("detach", { pack: p, folder: f }, `Detach ${p}`) }, "×"))),
-      ...(v.via || []).map(p => h("span", { class: "chip", title: "Included by an attached pack" }, `${p} (included)`)),
+      ...(v.via || []).map(p => viaChip(p, v.via_from, true)),
       v.packs.length ? null : h("span", { class: "muted" }, "none")),
     nopts ? h("div", { class: "row", style: "margin-top:10px" }, sel,
       h("button", { class: "btn", onclick: () => op("attach", { pack: sel.value, folder: f }, `Attach ${sel.value}`) }, "Attach pack")) : null,
