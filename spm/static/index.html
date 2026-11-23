@@ -642,7 +642,11 @@ function sourceCell(s) {
 function renderSkills() {
   const st = S.state, usage = st.usage || {}, q = S.skillQuery.toLowerCase(), sa = standalone();
   const F = { all: () => true, core: s => s.core, pack: s => s.packs.length, shelf: s => !s.core && !s.packs.length && !s.extra_folders };
-  const rows = st.skills.filter(F[S.skillFilter]).filter(s => !q || s.dir.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+  // search matches name, description and source: "anthropics/skills", "github.com/obra", "v7.0", a path
+  const sourceText = s => { const src = s.source || {};
+    return [src.url, shortUrl(src.url || ""), src.ref, src.path, src.local].filter(Boolean).join(" ").toLowerCase(); };
+  const rows = st.skills.filter(F[S.skillFilter]).filter(s => !q || s.dir.toLowerCase().includes(q)
+    || s.description.toLowerCase().includes(q) || sourceText(s).includes(q));
   const job = st.usage_job;
   const seg = h("div", { class: "seg" }, ...[["all", "All"], ["core", "Global"], ["pack", "In a pack"], ["shelf", "Unassigned"]].map(([k, l]) =>
     h("button", { "aria-pressed": String(S.skillFilter === k), onclick: () => { S.skillFilter = k; render(); } }, `${l} (${st.skills.filter(F[k]).length})`)));
@@ -662,7 +666,7 @@ function renderSkills() {
       usage._at ? ` Usage counted ${new Date(usage._at * 1000).toLocaleString()}.` : ""),
     job.error ? h("p", { class: "b-bad" }, job.error) : null,
     h("div", { class: "row", style: "margin:12px 0" }, seg,
-      h("input", { placeholder: "Search name or description", value: S.skillQuery, style: "width:280px",
+      h("input", { placeholder: "Search name, description or repo", value: S.skillQuery, style: "width:300px",
         oninput: e => { S.skillQuery = e.target.value; renderSkills(); const i = $("detail").querySelector("input"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } })),
     rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ...head.map(t => h("th", {}, t)))),
       h("tbody", {}, ...rows.map(s => {

@@ -46,7 +46,8 @@ in which folder and for which agent. Nothing happens until you press Apply.
   repository, the version in use (branch or release tag, with the commit when
   known) and the folder inside the repository, plus a **GitHub ↗** button that
   opens that exact folder at that version in your browser. In cc-switch mode
-  this comes from cc-switch's records.
+  this comes from cc-switch's records. The search box matches the repository too
+  (`anthropics/skills`, `github.com/obra`), the version and the path in it.
 - **Updates.** One button checks every installed skill against its repository:
   new commits on its branch, or newer release tags.
 - **MCP catalog** (standalone mode). Add stdio or HTTP/SSE servers with a form,
