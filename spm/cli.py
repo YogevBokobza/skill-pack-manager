@@ -35,7 +35,7 @@ from .sources import SourceError
 
 COMMANDS = ("status", "sync", "attach", "detach", "extra", "pack", "packs", "skills", "tokens", "usage", "suggest",
             "scan", "check-updates", "update", "rollback")
-LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex"}
+LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini": "Gemini CLI"}
 
 
 class CliError(Exception):

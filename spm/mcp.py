@@ -8,6 +8,7 @@ Actual state is read from three clients:
            written only through `claude mcp add-json/remove --scope local`
   opencode <folder>/.opencode/opencode.json, key "mcp"
   codex    <folder>/.codex/config.toml, tables [mcp_servers."<name>"]
+  gemini   <folder>/.gemini/settings.json, key "mcpServers" (when Gemini CLI is enabled)
 
 An entry is managed when its name exists in cc-switch and its file is not
 tracked by git. Entries with other names, and any entry in a git-tracked file,
@@ -26,7 +27,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-CLIENTS = ("claude", "opencode", "codex")
+CLIENTS = ("claude", "opencode", "codex", "gemini")  # gemini only when enabled
 NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -401,14 +402,87 @@ class CodexGlobal(CodexFile):
         pass
 
 
-def default_adapters(claude_json: Path, claude_cli: Path, codex_global: Path) -> dict:
-    return {"claude": ClaudeLocal(claude_json, claude_cli), "opencode": OpenCodeFile(),
-            "codex": CodexFile(codex_global)}
+class GeminiFile(OpenCodeFile):
+    """Gemini CLI: <folder>/.gemini/settings.json, key "mcpServers". The file
+    holds other settings too; they are kept. Gemini allows comments in it, and
+    a file with comments is never rewritten (the comments would be lost)."""
+    name = "gemini"
+    rel = ".gemini/settings.json"
+
+    def _load(self, folder) -> dict | None:
+        f = self.file(folder)
+        if not f.exists():
+            return None
+        try:
+            j = json.loads(f.read_text(encoding="utf8"))
+        except ValueError as e:
+            raise McpError(f"{f} has comments or is not plain JSON; add MCP servers there by hand") from e
+        if not isinstance(j, dict):
+            raise McpError(f"{f} is not a JSON object")
+        return j
+
+    def read(self, folder) -> dict:
+        try:
+            j = self._load(folder)
+        except McpError:
+            return {}
+        return dict((j or {}).get("mcpServers") or {})
+
+    @staticmethod
+    def spec(cfg: dict) -> dict:
+        if cfg.get("url"):
+            # Gemini: "url" is SSE, "httpUrl" is streamable HTTP
+            s = {"url": cfg["url"]} if transport(cfg) == "sse" else {"httpUrl": cfg["url"]}
+            if cfg.get("headers"):
+                s["headers"] = cfg["headers"]
+            return s
+        s = {"command": cfg["command"], "args": list(cfg.get("args") or [])}
+        if cfg.get("env"):
+            s["env"] = cfg["env"]
+        return s
+
+    def add(self, folder, name: str, cfg: dict) -> None:
+        j = self._load(folder) or {}
+        j.setdefault("mcpServers", {})[name] = self.spec(cfg)
+        self._save(folder, j)
+
+    def remove(self, folder, name: str) -> None:
+        j = self._load(folder) or {}
+        if name in (j.get("mcpServers") or {}):
+            del j["mcpServers"][name]
+            if not j["mcpServers"]:
+                del j["mcpServers"]
+            self._save(folder, j)
 
 
-def global_adapters(claude_json: Path, claude_cli: Path, codex_global: Path, opencode_dir: Path) -> dict:
-    return {"claude": ClaudeUser(claude_json, claude_cli), "opencode": OpenCodeGlobal(opencode_dir),
-            "codex": CodexGlobal(codex_global)}
+class GeminiGlobal(GeminiFile):
+    """~/.gemini/settings.json"""
+
+    def __init__(self, gemini_home: Path):
+        self.gemini_home = gemini_home
+
+    def file(self, folder=None) -> Path:
+        return self.gemini_home / "settings.json"
+
+    def tracked(self, folder=None) -> bool:
+        return False
+
+
+def default_adapters(claude_json: Path, claude_cli: Path, codex_global: Path, gemini: bool = False) -> dict:
+    a = {"claude": ClaudeLocal(claude_json, claude_cli), "opencode": OpenCodeFile(),
+         "codex": CodexFile(codex_global)}
+    if gemini:
+        a["gemini"] = GeminiFile()
+    return a
+
+
+def global_adapters(claude_json: Path, claude_cli: Path, codex_global: Path, opencode_dir: Path,
+                    gemini_home: Path | None = None) -> dict:
+    a = {"claude": ClaudeUser(claude_json, claude_cli), "opencode": OpenCodeGlobal(opencode_dir),
+         "codex": CodexGlobal(codex_global)}
+    if gemini_home is not None:
+        a["gemini"] = GeminiGlobal(gemini_home)
+    return a
 
 
 # -------------------------------------------------------------- desired/plan

@@ -40,7 +40,7 @@ for the `claude` CLI so nothing is written to your real `~/.claude.json`.
 | Path | Role |
 |---|---|
 | `spm/core.py` | packs.json model, desired vs actual state, plans, links, scan, usage |
-| `spm/mcp.py` | MCP catalog, Claude / OpenCode / Codex adapters (project and global), MCP plans |
+| `spm/mcp.py` | MCP catalog, Claude / OpenCode / Codex / Gemini adapters (project and global), MCP plans |
 | `spm/sources.py` | where skills and MCP servers come from: cc-switch, or the program's own store |
 | `spm/repo.py` | git refs (branch, tags sorted by version), shallow clones, finding SKILL.md, folder diffs |
 | `spm/scan.py` | pattern checks of a skill's files before install and update (read as text, never run) |

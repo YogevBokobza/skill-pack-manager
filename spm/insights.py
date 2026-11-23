@@ -11,6 +11,7 @@ Which folders each agent reads (from the agents' documentation):
   OpenCode     .opencode/skills .claude/skills .agents/skills
                ~/.config/opencode/skills ~/.claude/skills ~/.agents/skills
   Codex        .agents/skills                          ~/.codex/skills ~/.agents/skills
+  Gemini CLI   .gemini/skills .agents/skills           ~/.gemini/skills ~/.agents/skills  (when enabled)
 A name found twice counts once; the project's copy wins. Skills from plugins
 and built-in skills are not counted.
 """
@@ -25,16 +26,19 @@ from pathlib import Path
 
 from .repo import frontmatter
 
-AGENTS = ("claude", "opencode", "codex")
+AGENTS = ("claude", "opencode", "codex", "gemini")
 PROJECT_DIRS = {
     "claude": (".claude/skills",),
     "opencode": (".claude/skills", ".agents/skills", ".opencode/skills"),
     "codex": (".agents/skills",),
+    "gemini": (".gemini/skills", ".agents/skills"),
 }
 
 
-def global_dirs(home: Path, opencode_dir: Path, codex_home: Path) -> dict[str, tuple[Path, ...]]:
+def global_dirs(home: Path, opencode_dir: Path, codex_home: Path,
+                gemini_home: Path | None = None) -> dict[str, tuple[Path, ...]]:
     return {
+        "gemini": ((gemini_home or home / ".gemini") / "skills", home / ".agents" / "skills"),
         "claude": (home / ".claude" / "skills",),
         "opencode": (home / ".claude" / "skills", home / ".agents" / "skills", opencode_dir / "skills"),
         "codex": (codex_home / "skills", home / ".agents" / "skills"),
@@ -135,14 +139,15 @@ def costs(model, data: dict) -> dict:
     from .core import all_folders
     reader = Reader()
     cfg = model.cfg
-    g = global_dirs(cfg.home, cfg.opencode_dir, cfg.codex_global.parent)
-    out = {"global": {a: agent_cost(reader, g[a], None, ()) for a in AGENTS}, "folders": []}
+    g = global_dirs(cfg.home, cfg.opencode_dir, cfg.codex_global.parent, cfg.gemini_home)
+    agents = model.agents
+    out = {"global": {a: agent_cost(reader, g[a], None, ()) for a in agents}, "folders": []}
     for path in all_folders(data):
         f = Path(path)
         if not f.is_dir():
             continue
         out["folders"].append({"folder": path,
-                               "agents": {a: agent_cost(reader, g[a], f, PROJECT_DIRS[a]) for a in AGENTS},
+                               "agents": {a: agent_cost(reader, g[a], f, PROJECT_DIRS[a]) for a in agents},
                                "packs": router_savings(model, data, reader, f)})
     return out
 
@@ -150,15 +155,15 @@ def costs(model, data: dict) -> dict:
 def folder_cost(model, data: dict, folder) -> dict:
     reader = Reader()
     cfg = model.cfg
-    g = global_dirs(cfg.home, cfg.opencode_dir, cfg.codex_global.parent)
+    g = global_dirs(cfg.home, cfg.opencode_dir, cfg.codex_global.parent, cfg.gemini_home)
     f = Path(folder)
     return {a: {k: v for k, v in agent_cost(reader, g[a], f, PROJECT_DIRS[a]).items() if k != "skills"}
-            for a in AGENTS} if f.is_dir() else {}
+            for a in model.agents} if f.is_dir() else {}
 
 
 # ------------------------------------------------------------ suggestions
 
-LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex"}
+LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex", "gemini": "Gemini CLI"}
 
 
 def _names(clients) -> str:

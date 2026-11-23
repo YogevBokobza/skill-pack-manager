@@ -61,6 +61,12 @@ class Config:
     codex_global: Path = HOME / ".codex" / "config.toml"
     opencode_dir: Path = HOME / ".config" / "opencode"
     home: Path = HOME  # where agent session logs are read for usage counts
+    gemini_home: Path | None = None  # default: <home>/.gemini
+    gemini: bool = False  # manage Gemini CLI too (App decides: setting, else ~/.gemini exists)
+
+    def __post_init__(self):
+        if self.gemini_home is None:
+            self.gemini_home = Path(self.home) / ".gemini"
 
     @classmethod
     def default(cls, scan_roots: list[str] | None = None) -> "Config":
@@ -81,6 +87,7 @@ class Config:
             codex_global=Path(env("SPM_CODEX_GLOBAL", home / ".codex" / "config.toml")),
             opencode_dir=Path(env("SPM_OPENCODE_DIR", home / ".config" / "opencode")),
             home=home,
+            gemini_home=Path(env("SPM_GEMINI_HOME", home / ".gemini")),
         )
 
 
@@ -517,7 +524,12 @@ class Model:
         self.stores = Stores(self.store, cfg.data_dir / "routers")
         self.routers = router.Routers(cfg.data_dir / "routers")
         self.lock = threading.Lock()
-        self.adapters = mcp.default_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global)
+        self.adapters = mcp.default_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.gemini)
+
+    @property
+    def agents(self) -> tuple[str, ...]:
+        """The agents this program manages: claude, opencode, codex, and gemini when enabled."""
+        return tuple(self.adapters)
 
     def load(self) -> dict:
         try:
@@ -733,7 +745,7 @@ class Model:
         for name in sorted(set(want) | set(have)):
             clients = have.get(name, {})
             managed = [c for c, k in clients.items() if k == "managed"]
-            expected = [c for c in mcp.CLIENTS if (name, c) not in skipped]
+            expected = [c for c in self.adapters if (name, c) not in skipped]
             if name in want:
                 if name not in catalog:
                     status = "unknown"
@@ -778,7 +790,7 @@ class Model:
         servers = [catalog.public(n) | {"packs": in_packs.get(n, []), "extra_folders": extra_count.get(n, 0)}
                    for n in sorted(catalog.servers, key=str.lower)]
         return {"packs": packs, "folders": folders, "skills": self.catalog(data), "mcp": servers,
-                "mode": self.source.mode, "editable": self.source.editable,
+                "mode": self.source.mode, "editable": self.source.editable, "agents": list(self.agents),
                 "config": {"packs": str(self.cfg.packs), "store": str(self.store),
                            "data": str(self.cfg.data_dir),
                            "scan_roots": [str(r) for r in self.cfg.scan_roots]}}
@@ -876,7 +888,7 @@ class Model:
         skills = self.source.skills()
         by_name = {r["name"]: d for d, r in skills.items()}
         names = set(skills) | set(by_name)
-        raw = usage.collect(names, self.cfg.home)
+        raw = usage.collect(names, self.cfg.home, self.cfg.gemini_home if self.cfg.gemini else None)
         out: dict = {"_since": raw.pop("_since", None)}
         raw.pop("_counted", None)
         for name, u in raw.items():

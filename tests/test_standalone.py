@@ -209,7 +209,7 @@ class McpCatalog(RepoFixture):
 
     def test_global_mcp_on_off_in_all_clients(self):
         self.src.save_mcp("srv", {"command": "node", "args": ["a"], "env": {"TOKEN": SECRET}})
-        for c in mcp.CLIENTS:
+        for c in self.src.global_mcp:
             self.src.set_mcp_global("srv", c, True)
         self.assertEqual(self.src.mcp_catalog().servers["srv"]["global"], ["claude", "opencode", "codex"])
         self.assertEqual(json.loads(self.claude_json.read_text())["mcpServers"]["srv"]["command"], "node")
@@ -220,7 +220,7 @@ class McpCatalog(RepoFixture):
         self.src.set_mcp_global("srv", "claude", True)  # re-enable refreshes, no error
         with self.assertRaises(SourceError):
             self.src.delete_mcp("srv", {"packs": {}})
-        for c in mcp.CLIENTS:
+        for c in self.src.global_mcp:
             self.src.set_mcp_global("srv", c, False)
         self.assertEqual(self.src.mcp_catalog().servers["srv"]["global"], [])
         self.src.delete_mcp("srv", {"packs": {}})

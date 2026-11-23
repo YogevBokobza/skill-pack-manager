@@ -1,7 +1,7 @@
 # Skill Pack Manager
 
 Choose which agent skills and MCP servers each project gets, for
-**Claude Code**, **OpenCode** and **Codex**. A small desktop app for Windows,
+**Claude Code**, **OpenCode**, **Codex** and **Gemini CLI**. A small desktop app for Windows,
 macOS and Linux, with no dependencies beyond Python and git.
 
 ![Folders view: packs, MCP servers and skills of one project](docs/images/folders.jpg)
@@ -228,7 +228,7 @@ MCP servers. You can run the migration again later to pick up anything new.
 
 **Count usage** reads the session logs the agents keep on this computer. It
 counts Skill tool calls and slash commands (Claude Code), the skill tool
-(OpenCode), `SKILL.md` reads (Codex), and reads of
+(OpenCode), `SKILL.md` reads (Codex), `activate_skill` calls (Gemini CLI), and reads of
 `using-<pack>/references/<name>/<name>.md`, which is how agents open a skill
 behind a router. Nothing is sent anywhere. Claude Code deletes old session logs
 after 30 days by default, so the tab shows how far back the logs go, and "not
@@ -242,6 +242,7 @@ skill's name and description, from the skills folders each agent reads:
 | Claude Code | `.claude/skills` | `~/.claude/skills` |
 | OpenCode | `.opencode/skills`, `.claude/skills`, `.agents/skills` | `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` |
 | Codex | `.agents/skills` | `~/.codex/skills`, `~/.agents/skills` |
+| Gemini CLI | `.gemini/skills`, `.agents/skills` | `~/.gemini/skills`, `~/.agents/skills` |
 
 A skill with `disable-model-invocation: true` is not listed, so it costs
 nothing. Built-in skills and skills from plugins are not counted.
@@ -313,7 +314,7 @@ JSON; the app builds the router file itself.
 
 | Skill status | Meaning |
 |---|---|
-| linked | Wanted by a pack or as an extra, and linked for all three agents |
+| linked | Wanted by a pack or as an extra, and linked in all three skill folders |
 | not linked yet / partly linked | Wanted, some links missing. **Sync** adds them |
 | name conflict | The project has its own folder or link with that name. Left alone |
 | linked, no pack wants it | A link from this app that nothing asks for. **Sync** removes it |
@@ -327,12 +328,19 @@ column per agent.
 
 ### Where things go
 
-| | Claude Code | OpenCode | Codex |
-|---|---|---|---|
-| Skills in a project | `.claude/skills/<name>` | `.opencode/skills/<name>` | `.agents/skills/<name>` |
-| Skills, global (standalone) | `~/.claude/skills/<name>` | `~/.config/opencode/skills/<name>` | `~/.codex/skills/<name>` |
-| MCP in a project | local scope via `claude mcp add-json --scope local` | `.opencode/opencode.json` | `.codex/config.toml` (and the project is marked trusted in `~/.codex/config.toml`) |
-| MCP, global (standalone) | user scope via `claude mcp add-json --scope user` | `~/.config/opencode/opencode.json` | `~/.codex/config.toml` |
+| | Claude Code | OpenCode | Codex | Gemini CLI |
+|---|---|---|---|---|
+| Skills in a project | `.claude/skills/<name>` | `.opencode/skills/<name>` | `.agents/skills/<name>` | reads `.agents/skills` |
+| Skills, global (standalone) | `~/.claude/skills/<name>` | `~/.config/opencode/skills/<name>` | `~/.codex/skills/<name>` | `~/.gemini/skills/<name>` |
+| MCP in a project | local scope via `claude mcp add-json --scope local` | `.opencode/opencode.json` | `.codex/config.toml` (and the project is marked trusted in `~/.codex/config.toml`) | `.gemini/settings.json`, key `mcpServers` |
+| MCP, global (standalone) | user scope via `claude mcp add-json --scope user` | `~/.config/opencode/opencode.json` | `~/.codex/config.toml` | `~/.gemini/settings.json` |
+
+**Gemini CLI** is managed when `~/.gemini` exists, unless Settings → *Agents*
+says otherwise. It reads project skills from `.agents/skills`, so it needs no
+link of its own. Its `settings.json` holds other settings too; the app keeps
+them, and never rewrites a file with comments. SSE servers go in as `url`,
+streamable HTTP as `httpUrl`. If you turned on Gemini's trusted folders, it
+asks you to trust a project before it loads that project's settings.
 
 Skills are **links** to one copy in the store: junctions on Windows (no admin
 rights needed), symlinks on macOS and Linux. Updating a skill in the store
@@ -416,6 +424,7 @@ All optional environment variables:
 | `SPM_CLAUDE_JSON` | `~/.claude.json` | read to show Claude's MCP state |
 | `SPM_CODEX_GLOBAL` | `~/.codex/config.toml` | Codex global config |
 | `SPM_OPENCODE_DIR` | `~/.config/opencode` | OpenCode global config folder |
+| `SPM_GEMINI_HOME` | `~/.gemini` | Gemini CLI folder (settings, skills, sessions) |
 
 ## Development
 
