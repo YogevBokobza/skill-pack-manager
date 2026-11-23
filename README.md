@@ -113,6 +113,31 @@ Shortcuts:
 
 Or install it as a command: `pip install .` and run `skill-pack-manager`.
 
+### Command line
+
+The same operations work without the window, for scripts, git hooks and agents:
+
+```sh
+python -m spm status                     # every folder in packs.json: in sync or not
+python -m spm status .                   # one folder, skill by skill
+python -m spm attach web ~/Projects/shop # FOLDER defaults to the current folder
+python -m spm detach web
+python -m spm sync --all
+python -m spm extra add stripe-integration
+python -m spm pack add web frontend-design webapp-testing
+python -m spm tokens                     # estimated context cost per folder and agent
+python -m spm usage --count              # read the session logs, then list skill use
+python -m spm suggest --days 90          # cleanup suggestions, each with the command that does it
+python -m spm scan                       # projects without a pack, with a suggested pack
+python -m spm check-updates              # standalone mode
+```
+
+A command that changes something prints its plan first. In a terminal it asks
+before applying. Elsewhere it applies only with `--yes` and exits with code 2
+without it, so an agent can show you the plan before running it again.
+`--dry-run` prints the plan only, and `--json` prints machine-readable output.
+After `pip install .`, the command is also available as `spm`.
+
 The app starts a local server on `127.0.0.1` and opens its window. The server
 runs as long as the window is open, also when the window sits in the
 background, and stops a few seconds after you close it. In a regular browser

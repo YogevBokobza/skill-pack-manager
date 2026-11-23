@@ -2,6 +2,7 @@
 
   python -m spm             open the window (Edge/Chrome app mode, else the default browser)
   python -m spm --no-window print the URL only (headless, or to use your own browser)
+  python -m spm <command>   command line (spm help lists the commands; see spm/cli.py)
 
 The token travels in the URL fragment, which the browser never sends to the
 server. The process exits 30 s after the window stops sending heartbeats.
@@ -15,12 +16,17 @@ import time
 import traceback
 import webbrowser
 
+from . import cli
 from .osinfo import app_browser, data_dir
 from .server import App, serve
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="spm", description=__doc__.splitlines()[0])
+    args = sys.argv[1:] if argv is None else argv
+    if args and (args[0] in cli.COMMANDS or args[0] in ("help", "commands")):
+        sys.exit(cli.run(["--help"] if args[0] in ("help", "commands") else args))
+    ap = argparse.ArgumentParser(prog="spm", description=__doc__.splitlines()[0],
+                                 epilog="Commands: " + ", ".join(cli.COMMANDS) + ". Run spm help for details.")
     ap.add_argument("--no-window", action="store_true", help="print the URL and keep serving")
     ap.add_argument("--port", type=int, default=0)
     a = ap.parse_args(argv)

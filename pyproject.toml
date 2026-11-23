@@ -21,6 +21,7 @@ classifiers = [
 
 [project.scripts]
 skill-pack-manager = "spm.__main__:main"
+spm = "spm.__main__:main"
 
 [tool.setuptools]
 packages = ["spm"]
