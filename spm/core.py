@@ -63,6 +63,7 @@ class Config:
     home: Path = HOME  # where agent session logs are read for usage counts
     gemini_home: Path | None = None  # default: <home>/.gemini
     gemini: bool = False  # manage Gemini CLI too (App decides: setting, else ~/.gemini exists)
+    agents: tuple = ("claude", "opencode", "codex")  # the others switched on (Settings -> Agents)
 
     def __post_init__(self):
         if self.gemini_home is None:
@@ -282,6 +283,18 @@ def routed(data: dict, folder) -> dict[str, list[str]]:
     return out
 
 
+ALL_AGENTS = ("claude", "opencode", "codex", "gemini")
+# the project skills folder each agent gets links in; Codex and Gemini share one
+AGENT_SKILL_DIR = {"claude": ".claude/skills", "opencode": ".opencode/skills",
+                   "codex": ".agents/skills", "gemini": ".agents/skills"}
+
+
+def skill_dirs_for(agents) -> tuple[str, ...]:
+    """Skill folders that agents need, in SKILL_DIRS order."""
+    want = {AGENT_SKILL_DIR[a] for a in agents if a in AGENT_SKILL_DIR}
+    return tuple(d for d in SKILL_DIRS if d in want)
+
+
 def actual(folder: Path, store) -> dict[str, dict[str, str]]:
     """skill -> {skill dir: managed|foreign|own}; includes the hidden dir"""
     out: dict[str, dict[str, str]] = {}
@@ -295,8 +308,10 @@ def actual(folder: Path, store) -> dict[str, dict[str, str]]:
     return out
 
 
-def plan(data: dict, folder, store) -> dict:
-    """Links to add and remove so the folder matches packs.json."""
+def plan(data: dict, folder, store, dirs: tuple[str, ...] = SKILL_DIRS) -> dict:
+    """Links to add and remove so the folder matches packs.json. dirs: the
+    skill folders of the agents that are on; managed links in the others are
+    removed (an agent was switched off)."""
     stores = store if isinstance(store, Stores) else Stores(store)
     folder = Path(folder)
     want = desired(data, folder)
@@ -310,7 +325,7 @@ def plan(data: dict, folder, store) -> dict:
         if not stores.exists(s):
             res["missing"].append(s)
             continue
-        for rel in SKILL_DIRS:
+        for rel in dirs:
             kind = have.get(s, {}).get(rel)
             if kind is None:
                 res["add"].append([rel, s, str(stores.src(s))])
@@ -319,7 +334,7 @@ def plan(data: dict, folder, store) -> dict:
     for s, places in sorted(have.items()):
         for rel, kind in places.items():
             # links in .skill-packs/ came from an earlier router layout: always cleaned up
-            wanted = rel != HIDDEN_DIR and s in want
+            wanted = rel != HIDDEN_DIR and rel in dirs and s in want
             if kind == "managed" and not wanted:
                 res["remove"].append([rel, s])
     return res
@@ -537,6 +552,8 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
         return packset.folders_using(data, a["pack"])
     if op == "sync":
         return [a["folder"]]
+    if op == "sync_all":
+        return [f for f in all_folders(data) if Path(f).is_dir()]
     if op == "import_packs":
         from . import share
         try:
@@ -558,12 +575,22 @@ class Model:
         self.stores = Stores(self.store, cfg.data_dir / "routers")
         self.routers = router.Routers(cfg.data_dir / "routers")
         self.lock = threading.Lock()
-        self.adapters = mcp.default_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.gemini)
+        on = set(cfg.agents) | ({"gemini"} if cfg.gemini else set())
+        self.all_adapters = mcp.default_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, True)
+        self.adapters = {k: v for k, v in self.all_adapters.items() if k in on}
 
     @property
     def agents(self) -> tuple[str, ...]:
         """The agents this program manages: claude, opencode, codex, and gemini when enabled."""
         return tuple(self.adapters)
+
+    @property
+    def skill_dirs(self) -> tuple[str, ...]:
+        return skill_dirs_for(self.agents)
+
+    def off_adapters(self) -> dict:
+        """Adapters of agents that are off: their managed entries get removed."""
+        return {k: v for k, v in self.all_adapters.items() if k not in self.adapters}
 
     def load(self) -> dict:
         try:
@@ -597,16 +624,17 @@ class Model:
         return self.source.mcp_catalog()
 
     def full_plan(self, data: dict, folder, catalog: mcp.Catalog) -> dict:
-        return plan(data, folder, self.stores) | mcp.plan(data, folder, catalog, self.adapters)
+        return plan(data, folder, self.stores, self.skill_dirs) | \
+            mcp.plan(data, folder, catalog, self.adapters, self.off_adapters())
 
     def apply_full(self, p: dict, catalog: mcp.Catalog) -> list[str]:
         folder = Path(p["folder"])
         log = apply_plan(p, self.stores)
         if p["mcp_add"] or p["mcp_remove"]:
-            mlog, created = mcp.apply(p, folder, catalog, self.adapters)
+            mlog, created, deleted = mcp.apply(p, folder, catalog, {**self.off_adapters(), **self.adapters})
             log += mlog
-            if created:
-                update_excludes(folder, created, set())
+            if created or deleted:
+                update_excludes(folder, created, deleted)
         return log
 
     def run(self, op: str, args: dict, dry: bool = True) -> dict:
@@ -731,6 +759,10 @@ class Model:
 
     # ---------------------------------------------------------------- views
 
+    def on(self, clients) -> list[str]:
+        """clients limited to the agents that are on (cc-switch lists them all)."""
+        return [c for c in clients or [] if c in self.adapters]
+
     def catalog(self, data: dict) -> list[dict]:
         try:
             rows = self.source.skills()
@@ -749,7 +781,7 @@ class Model:
             src = r.get("source") or {}
             out.append({"dir": d, "name": r["name"], "description": (r.get("description") or "")[:400],
                         "tokens": insights.tokens(r["name"], r.get("description") or ""),
-                        "core": bool(r.get("global")), "global": r.get("global", []),
+                        "core": bool(self.on(r.get("global"))), "global": self.on(r.get("global")),
                         "source": r.get("source"), "updated_at": r.get("updated_at"),
                         "web_url": repo.web_url(src.get("url"), src.get("ref"), src.get("path")),
                         "packs": in_packs.get(d, []), "extra_folders": extra_count.get(d, 0),
@@ -764,10 +796,10 @@ class Model:
         for s in sorted(set(want) | set(hide) | set(have)):
             all_places = have.get(s, {})
             places = {r: k for r, k in all_places.items() if r != HIDDEN_DIR}
-            managed = [r for r, k in places.items() if k == "managed"]
+            managed = [r for r, k in places.items() if k == "managed" and r in self.skill_dirs]
             if s in want:
-                status = "ok" if len(managed) == len(SKILL_DIRS) else "partial" if managed else "missing"
-                if any(k != "managed" for k in places.values()):
+                status = "ok" if len(managed) == len(self.skill_dirs) else "partial" if managed else "missing"
+                if any(k != "managed" for r, k in places.items() if r in self.skill_dirs):
                     status = "conflict"
             elif s in hide:
                 status = "routed" if self.stores.exists(s) else "missing"
@@ -811,7 +843,7 @@ class Model:
             else:
                 status = "own"
             out.append({"name": name, "sources": want.get(name, []), "status": status, "clients": clients,
-                        "global": catalog.servers[name]["global"] if name in catalog else []})
+                        "global": self.on(catalog.servers[name]["global"]) if name in catalog else []})
         return out
 
     def state(self) -> dict:
@@ -842,10 +874,12 @@ class Model:
         for v in data.get("folders", {}).values():
             for m in v.get("mcp", []):
                 extra_count[m] = extra_count.get(m, 0) + 1
-        servers = [catalog.public(n) | {"packs": in_packs.get(n, []), "extra_folders": extra_count.get(n, 0)}
+        servers = [catalog.public(n) | {"global": self.on(catalog.servers[n]["global"]),
+                                        "packs": in_packs.get(n, []), "extra_folders": extra_count.get(n, 0)}
                    for n in sorted(catalog.servers, key=str.lower)]
         return {"packs": packs, "folders": folders, "skills": self.catalog(data), "mcp": servers,
                 "mode": self.source.mode, "editable": self.source.editable, "agents": list(self.agents),
+                "skill_dirs": list(self.skill_dirs),
                 "config": {"packs": str(self.cfg.packs), "store": str(self.store),
                            "data": str(self.cfg.data_dir),
                            "scan_roots": [str(r) for r in self.cfg.scan_roots]}}
@@ -944,7 +978,8 @@ class Model:
         skills = self.source.skills()
         by_name = {r["name"]: d for d, r in skills.items()}
         names = set(skills) | set(by_name)
-        raw = usage.collect(names, self.cfg.home, self.cfg.gemini_home if self.cfg.gemini else None)
+        raw = usage.collect(names, self.cfg.home, self.cfg.gemini_home if "gemini" in self.agents else None,
+                            set(self.agents))
         out: dict = {"_since": raw.pop("_since", None)}
         raw.pop("_counted", None)
         for name, u in raw.items():

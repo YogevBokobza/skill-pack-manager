@@ -230,13 +230,26 @@ class OpenCodeFile:
         j.setdefault("mcp", {})[name] = self.spec(cfg)
         self._save(folder, j)
 
-    def remove(self, folder: Path, name: str) -> None:
+    def remove(self, folder: Path, name: str) -> bool:
+        """True when the file was left empty and deleted."""
         j = self._load(folder) or {}
         if name in (j.get("mcp") or {}):
             del j["mcp"][name]
             if not j["mcp"]:
                 del j["mcp"]
+            if not {k: v for k, v in j.items() if k != "$schema"}:
+                return self._delete(folder)
             self._save(folder, j)
+        return False
+
+    def _delete(self, folder) -> bool:
+        f = self.file(folder)
+        f.unlink()
+        try:
+            f.parent.rmdir()  # only when empty
+        except OSError:
+            pass
+        return True
 
     def supports(self, cfg: dict) -> str | None:
         return None
@@ -446,13 +459,16 @@ class GeminiFile(OpenCodeFile):
         j.setdefault("mcpServers", {})[name] = self.spec(cfg)
         self._save(folder, j)
 
-    def remove(self, folder, name: str) -> None:
+    def remove(self, folder, name: str) -> bool:
         j = self._load(folder) or {}
         if name in (j.get("mcpServers") or {}):
             del j["mcpServers"][name]
             if not j["mcpServers"]:
                 del j["mcpServers"]
+            if not j:
+                return self._delete(folder)
             self._save(folder, j)
+        return False
 
 
 class GeminiGlobal(GeminiFile):
@@ -527,7 +543,9 @@ def actual(folder: Path, catalog: Catalog, adapters: dict, tracked: Tracked | No
     return out
 
 
-def plan(data: dict, folder, catalog: Catalog, adapters: dict) -> dict:
+def plan(data: dict, folder, catalog: Catalog, adapters: dict, off: dict | None = None) -> dict:
+    """off: adapters of agents that are switched off; entries this program
+    manages there (name in the catalog, file not tracked by git) are removed."""
     folder = Path(folder)
     res = {"mcp_add": [], "mcp_remove": [], "mcp_conflicts": [], "mcp_missing": [], "mcp_warnings": []}
     if not folder.is_dir():
@@ -538,7 +556,7 @@ def plan(data: dict, folder, catalog: Catalog, adapters: dict) -> dict:
         if name not in catalog:
             res["mcp_missing"].append(name)
             continue
-        cfg, glob = catalog.config(name), catalog.servers[name]["global"]
+        cfg, glob = catalog.config(name), [c for c in catalog.servers[name]["global"] if c in adapters]
         for c, a in adapters.items():
             kind = have.get(name, {}).get(c)
             why = a.supports(cfg)
@@ -561,11 +579,17 @@ def plan(data: dict, folder, catalog: Catalog, adapters: dict) -> dict:
         for c, kind in places.items():
             if kind == "managed":
                 res["mcp_remove"].append([c, name])
+    if off:
+        for name, places in sorted(actual(folder, catalog, off).items()):
+            for c, kind in places.items():
+                if kind == "managed":
+                    res["mcp_remove"].append([c, name])
     return res
 
 
-def apply(p: dict, folder: Path, catalog: Catalog, adapters: dict) -> tuple[list[str], set[str]]:
-    log, created = [], set()
+def apply(p: dict, folder: Path, catalog: Catalog, adapters: dict) -> tuple[list[str], set[str], set[str]]:
+    """Returns the log, files created and files deleted (paths for .git/info/exclude)."""
+    log, created, deleted = [], set(), set()
     for c, name in p["mcp_add"]:
         a = adapters[c]
         if a.rel and not (folder / a.rel).exists():
@@ -573,6 +597,10 @@ def apply(p: dict, folder: Path, catalog: Catalog, adapters: dict) -> tuple[list
         a.add(folder, name, catalog.config(name))
         log.append(f"MCP {name} added for {c}")
     for c, name in p["mcp_remove"]:
-        adapters[c].remove(folder, name)
-        log.append(f"MCP {name} removed for {c}")
-    return log, created
+        a = adapters[c]
+        if a.remove(folder, name):
+            deleted.add(f"/{a.rel}")
+            log.append(f"MCP {name} removed for {c}; {a.rel} was left empty and deleted")
+        else:
+            log.append(f"MCP {name} removed for {c}")
+    return log, created, deleted

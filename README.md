@@ -100,6 +100,10 @@ in which folder and for which agent. Nothing happens until you press Apply.
   used in one project only, a pack skill or extra skill unused where it is
   attached, a big pack without a router. Each suggestion opens the usual
   preview.
+- **Agents on and off.** Settings → *Agents* switches each agent on or off.
+  An agent that is off gets no skills or MCP servers, drops out of the columns,
+  costs and usage, and causes no warnings. **Sync all** then removes what the
+  app added for it, after a preview.
 - **Light, dark or system theme.**
 
 ## Screenshots
@@ -160,6 +164,7 @@ python -m spm manifest --write web       # create it; commit it to share
 python -m spm manifest --apply           # add and attach what it asks for
 python -m spm router-test web --write-cases   # AI writes test requests, then judges the router
 python -m spm router-test web            # run the saved requests again (exit 3 if any miss)
+python -m spm agents gemini off          # stop managing an agent; then spm sync --all
 python -m spm tokens                     # estimated context cost per folder and agent
 python -m spm usage --count              # read the session logs, then list skill use
 python -m spm suggest --days 90          # cleanup suggestions, each with the command that does it
@@ -378,8 +383,18 @@ column per agent.
 | MCP in a project | local scope via `claude mcp add-json --scope local` | `.opencode/opencode.json` | `.codex/config.toml` (and the project is marked trusted in `~/.codex/config.toml`) | `.gemini/settings.json`, key `mcpServers` |
 | MCP, global (standalone) | user scope via `claude mcp add-json --scope user` | `~/.config/opencode/opencode.json` | `~/.codex/config.toml` | `~/.gemini/settings.json` |
 
-**Gemini CLI** is managed when `~/.gemini` exists, unless Settings → *Agents*
-says otherwise. It reads project skills from `.agents/skills`, so it needs no
+**Which agents are managed.** Claude Code, OpenCode and Codex are on by
+default; Gemini CLI is on when `~/.gemini` exists. Settings → *Agents* (or
+`spm agents gemini off`) changes that. When an agent is off, the app stops
+adding to its folders and files, and Sync removes what it added there: links
+in that agent's skills folder and MCP entries whose name is in the catalog, in
+files git does not track. A settings file left empty is deleted, with its line
+in `.git/info/exclude`. Codex and Gemini share `.agents/skills`, so those links
+go only when both are off. Global switches and anything you added yourself
+stay. Global switches that cc-switch keeps for an agent that is off are not
+shown and cause no warnings.
+
+**Gemini CLI** reads project skills from `.agents/skills`, so it needs no
 link of its own. Its `settings.json` holds other settings too; the app keeps
 them, and never rewrites a file with comments. SSE servers go in as `url`,
 streamable HTTP as `httpUrl`. If you turned on Gemini's trusted folders, it
