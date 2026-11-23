@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import mcp, migrate, repo, router, share
+from . import evaluate, mcp, migrate, repo, router, share
 from .core import Config, Model, OpError, UnsafeRemoval
 from .mcp import McpError
 from .osinfo import WINDOWS, MACOS, data_dir, open_path
@@ -178,6 +178,8 @@ class App:
                                          api_key=self.secrets.load().get(writer, ""))
             return draft | {"writer": writer, "skills": [s["name"] for s in skills],
                             "descriptions": {s["name"]: router.one_line(s["description"]) for s in skills}}
+        if path in ("/api/router/test-cases", "/api/router/test"):
+            return self.router_test(path.rsplit("/", 1)[1], b)
         if path == "/api/secret":
             if b.get("name") not in ("anthropic", "openai"):
                 raise OpError("unknown key")
@@ -267,6 +269,42 @@ class App:
         if path == "/api/mcp/global":
             return {"log": [self.local().set_mcp_global(b["name"], b["client"], bool(b["on"]))]}
         raise OpError(f"unknown endpoint {path}")
+
+    def asker(self, writer: str | None):
+        """prompt -> text through the chosen AI writer (Settings default)."""
+        ai = self.settings.load().get("ai") or {}
+        writer = writer or ai.get("writer") or "template"
+        m = self.model
+
+        def ask(prompt: str) -> str:
+            return router.ask(writer, prompt, claude_cli=m.cfg.claude_cli,
+                              model=(ai.get("models") or {}).get(writer, ""),
+                              api_key=self.secrets.load().get(writer, ""), max_tokens=4000)
+        return writer, ask
+
+    def router_test(self, step: str, b: dict) -> dict:
+        m, data = self.model, self.model.load()
+        pack = b.get("pack", "")
+        if pack not in data["packs"]:
+            raise OpError(f"no such pack: {pack!r}")
+        store = evaluate.Store(self.data_dir / "router-tests")
+        skills = m.router_skills(data, pack)
+        names = [s["name"] for s in skills]
+        if step == "test-cases":
+            if b.get("saved"):
+                last = store.load(pack)
+                return {"text": evaluate.format_cases(last.get("cases") or []), "result": last.get("result")}
+            writer, ask = self.asker(b.get("writer"))
+            cases = evaluate.write_cases(ask, pack, skills)
+            return {"text": evaluate.format_cases(cases), "writer": writer}
+        text = m.routers.read(pack)
+        if not text:
+            raise OpError(f"pack {pack!r} has no router yet")
+        cases = evaluate.parse_cases(b.get("text", ""), names)
+        writer, ask = self.asker(b.get("writer"))
+        result = evaluate.run(ask, text, cases, m.router_index(data, pack)) | {"writer": writer}
+        store.save(pack, cases, result)
+        return result
 
     def bundle(self, b: dict) -> dict:
         """A pack file from the request: its text, or the manifest of a folder."""

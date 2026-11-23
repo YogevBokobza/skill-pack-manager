@@ -185,11 +185,10 @@ def _run(cmd: list[str], prompt: str, timeout: int = 240) -> subprocess.Complete
             raise RouterError(f"{Path(cmd[0]).name} took too long") from e
 
 
-def write_with_ai(writer: str, pack: str, skills: list[dict], *, claude_cli: Path, model: str = "",
-                  api_key: str = "", codex_cli: str = "codex") -> dict:
-    prompt = PROMPT.format(pack=pack, skills=_skills_block(skills))
-    if writer == "template":
-        return template(pack, skills)
+def ask(writer: str, prompt: str, *, claude_cli: Path, model: str = "", api_key: str = "",
+        codex_cli: str = "codex", max_tokens: int = 2000) -> str:
+    """Send one prompt to an AI writer and return its text answer. The CLIs run
+    with no tools in an empty folder; the APIs get the prompt only."""
     if writer == "claude-cli":
         cmd = [str(claude_cli), "-p", "--tools", "", "--output-format", "json", "--no-session-persistence",
                "--strict-mcp-config"] + (["--model", model] if model else [])
@@ -197,10 +196,9 @@ def write_with_ai(writer: str, pack: str, skills: list[dict], *, claude_cli: Pat
         if r.returncode != 0:
             raise RouterError(f"claude: {(r.stderr or r.stdout).strip()[-300:]}")
         try:
-            text = json.loads(r.stdout).get("result", "")
+            return json.loads(r.stdout).get("result", "")
         except ValueError:
-            text = r.stdout
-        return _validate(_extract_json(text), pack, skills)
+            return r.stdout
     if writer == "codex-cli":
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "answer.txt"
@@ -209,8 +207,7 @@ def write_with_ai(writer: str, pack: str, skills: list[dict], *, claude_cli: Pat
             r = _run(cmd, prompt)
             if r.returncode != 0:
                 raise RouterError(f"codex: {(r.stderr or r.stdout).strip()[-300:]}")
-            text = out.read_text(encoding="utf8") if out.exists() else r.stdout
-        return _validate(_extract_json(text), pack, skills)
+            return out.read_text(encoding="utf8") if out.exists() else r.stdout
     if writer in ("anthropic", "openai"):
         if not api_key:
             raise RouterError(f"no {writer} API key saved; add it in Settings")
@@ -218,22 +215,32 @@ def write_with_ai(writer: str, pack: str, skills: list[dict], *, claude_cli: Pat
         if writer == "anthropic":
             url, headers = "https://api.anthropic.com/v1/messages", {
                 "x-api-key": api_key, "anthropic-version": "2023-06-01"}
-            body = {"model": model, "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]}
+            body = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]}
         else:
             url, headers = "https://api.openai.com/v1/chat/completions", {"Authorization": f"Bearer {api_key}"}
             body = {"model": model, "messages": [{"role": "user", "content": prompt}]}
         req = urllib.request.Request(url, json.dumps(body).encode(), {**headers, "content-type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=180) as resp:
                 j = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             with e:
                 raise RouterError(f"{writer} API: HTTP {e.code} {e.read()[:300].decode(errors='replace')}") from e
         except urllib.error.URLError as e:
             raise RouterError(f"{writer} API: {e.reason}") from e
-        text = j["content"][0]["text"] if writer == "anthropic" else j["choices"][0]["message"]["content"]
-        return _validate(_extract_json(text), pack, skills)
+        return j["content"][0]["text"] if writer == "anthropic" else j["choices"][0]["message"]["content"]
+    if writer == "template":
+        raise RouterError("the template writer works offline and cannot answer; pick an AI writer")
     raise RouterError(f"unknown writer {writer!r}")
+
+
+def write_with_ai(writer: str, pack: str, skills: list[dict], *, claude_cli: Path, model: str = "",
+                  api_key: str = "", codex_cli: str = "codex") -> dict:
+    if writer == "template":
+        return template(pack, skills)
+    prompt = PROMPT.format(pack=pack, skills=_skills_block(skills))
+    text = ask(writer, prompt, claude_cli=claude_cli, model=model, api_key=api_key, codex_cli=codex_cli)
+    return _validate(_extract_json(text), pack, skills)
 
 
 # --------------------------------------------------------------------- storage
