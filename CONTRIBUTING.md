@@ -49,7 +49,8 @@ for the `claude` CLI so nothing is written to your real `~/.claude.json`.
 | `spm/insights.py` | context cost estimates, cleanup suggestions, project stack tags and pack suggestions (read-only) |
 | `spm/server.py` | local HTTP API (token + Host check) |
 | `spm/static/index.html` | the whole UI, plain JavaScript, no build step |
-| `spm/__main__.py` | launcher: server + app window |
+| `spm/__main__.py` | launcher: server + app window, or a command (`spm status`, ...) |
+| `spm/cli.py` | command line: the window's operations with a plan, a prompt or `--yes`, and `--json` |
 | `tools/` | demo builder, fake Claude CLI, icon generator |
 
 ## Pull requests
