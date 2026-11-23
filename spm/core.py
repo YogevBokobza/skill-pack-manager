@@ -127,11 +127,18 @@ def _roots(store) -> tuple[Path, ...]:
 def classify(entry: Path, store) -> str:
     """managed | foreign | own. store: a Path, a tuple of Paths, or Stores."""
     if is_link(entry):
-        parent = norm(Path(os.path.realpath(entry)).parent)
-        if any(parent == norm(r) for r in _roots(store)):
+        parent = real(Path(os.path.realpath(entry)).parent)
+        if any(parent == real(r) for r in _roots(store)):
             return "managed"
         return "foreign"
     return "own"
+
+
+def real(p) -> str:
+    """Normalized real path: resolves symlinks and junctions in every component
+    (macOS /var -> /private/var) and Windows 8.3 short names (RUNNER~1), so two
+    spellings of one folder compare equal."""
+    return norm(os.path.realpath(p))
 
 
 def safe_unlink(entry: Path, store) -> None:
@@ -309,7 +316,7 @@ def apply_plan(p: dict, store) -> list[str]:
         if dst.exists() or is_link(dst):
             continue
         src = Path(target[0]) if target else roots.src(s)
-        if not any(norm(src.parent) == norm(r) for r in _roots(roots)):
+        if not any(real(src.parent) == real(r) for r in _roots(roots)):
             raise UnsafeRemoval(f"refusing to link outside the store: {src}")
         make_junction(src, dst)
         add_ex.add(f"/{rel}/{s}")

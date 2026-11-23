@@ -79,6 +79,19 @@ class SafeUnlink(Env):
             core.safe_unlink(link, self.store)
         self.assertTrue((elsewhere / "f").exists())
 
+    def test_store_reached_through_an_alias_path(self):
+        # macOS /var -> /private/var, Windows 8.3 short names (RUNNER~1): the store's
+        # path and a link's resolved target can name the same folder differently
+        alias = Path(self.tmp.name) / "store-alias"
+        core.make_junction(self.store, alias)
+        link = self.proj / "alpha"
+        core.make_junction(alias / "alpha", link)
+        self.assertEqual(core.classify(link, alias), "managed")
+        self.assertEqual(core.classify(link, self.store), "managed")
+        core.safe_unlink(link, alias)
+        self.assertFalse(os.path.lexists(link))
+        self.store_intact()
+
     def test_removes_only_the_link(self):
         link = self.proj / "alpha"
         core.make_junction(self.store / "alpha", link)

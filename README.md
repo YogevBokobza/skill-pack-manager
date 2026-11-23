@@ -340,7 +340,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 82 tests, Windows, macOS and Linux
+python -m unittest -v           # 83 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```
