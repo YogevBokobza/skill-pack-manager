@@ -259,7 +259,8 @@ class Cli:
                 self.p("no folders in packs.json")
             for r in rows:
                 state = "missing" if not r["exists"] else "in sync" if r["in_sync"] else "out of sync"
-                self.p(f"{state:<12} {r['folder']}  [{', '.join(r['packs']) or 'no pack'}]"
+                via = [f"{p} via {', '.join(r['via_from'].get(p, []))}" for p in r.get("via") or []]
+                self.p(f"{state:<12} {r['folder']}  [{', '.join(r['packs'] + via) or 'no pack'}]"
                        + (f" +{len(r['extras'])} extra" if r["extras"] else ""))
         return self.emit(rows, text)
 

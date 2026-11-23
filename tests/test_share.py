@@ -61,6 +61,17 @@ class Includes(McpEnv):
         cli.run(["packs"], app=mock.Mock(model=self.m), out=out)
         self.assertIn(f"folder: {self.other} (via two)", out.getvalue())
 
+    def test_folder_list_shows_included_packs_and_who_brings_them(self):
+        self.m.run("pack_include", {"pack": "one", "include": "two"}, dry=False)
+        self.m.run("pack_include", {"pack": "two", "include": "web"}, dry=False)
+        self.m.run("attach", {"pack": "one", "folder": str(self.proj)}, dry=False)
+        row = next(f for f in self.m.state()["folders"] if f["folder"] == str(self.proj))
+        self.assertEqual((row["packs"], row["via"]), (["one"], ["two", "web"]))
+        self.assertEqual(row["via_from"], {"two": ["one"], "web": ["one"]})
+        out = io.StringIO()
+        cli.run(["status"], app=mock.Mock(model=self.m), out=out)
+        self.assertIn("[one, two via one, web via one]", out.getvalue())
+
     def test_hand_edited_cycle_does_not_loop(self):
         data = self.m.load()
         data["packs"]["one"]["includes"] = ["two"]

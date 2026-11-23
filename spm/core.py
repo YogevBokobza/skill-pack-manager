@@ -814,6 +814,7 @@ class Model:
         p = self.full_plan(data, f, catalog)
         return {"folder": folder, "exists": f.is_dir(), "packs": packs_of(data, f),
                 "via": [n for n in packset.active(data, f) if n not in packs_of(data, f)],
+                "via_from": packset.brought_by(data, f),
                 "manifest": share_summary(data, f),
                 "extras": extras_of(data, f), "mcp_extras": mcp_extras_of(data, f), "skills": skills,
                 "mcp": self.mcp_view(data, f, catalog, p), "cost": insights.folder_cost(self, data, f),
@@ -857,7 +858,8 @@ class Model:
             counts: dict[str, int] = {}
             for s in v["skills"] + v["mcp"]:
                 counts[s["status"]] = counts.get(s["status"], 0) + 1
-            folders.append({"folder": path, "exists": v["exists"], "packs": v["packs"],
+            folders.append({"folder": path, "exists": v["exists"], "packs": v["packs"], "via": v["via"],
+                            "via_from": v["via_from"],
                             "extras": v["extras"], "mcp_extras": v["mcp_extras"],
                             "mcp": [m["name"] for m in v["mcp"] if m["sources"]],
                             "in_sync": v["in_sync"], "counts": counts})
