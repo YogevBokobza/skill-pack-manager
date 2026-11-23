@@ -48,6 +48,9 @@ in which folder and for which agent. Nothing happens until you press Apply.
   opens that exact folder at that version in your browser. In cc-switch mode
   this comes from cc-switch's records. The search box matches the repository too
   (`anthropics/skills`, `github.com/obra`), the version and the path in it.
+- **Bulk add and remove.** Tick skills in the Skills tab (or select all that the
+  search shows; Shift+click for a range) and add them to a pack or remove them
+  from one, with a single preview.
 - **Updates.** One button checks every installed skill against its repository:
   new commits on its branch, or newer release tags.
 - **MCP catalog** (standalone mode). Add stdio or HTTP/SSE servers with a form,
@@ -337,7 +340,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 81 tests, Windows, macOS and Linux
+python -m unittest -v           # 82 tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

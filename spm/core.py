@@ -423,6 +423,25 @@ def mutate(data: dict, store: Path, op: str, a: dict, catalog=None) -> list[str]
                 raise OpError(f"{s!r} is not in pack {a['pack']!r}")
             p["skills"].remove(s)
         return list(p["paths"])
+    if op in ("pack_add_skills", "pack_remove_skills"):
+        # bulk version from the Skills tab: one preview for many skills
+        p = _check_pack(data, a["pack"])
+        names = list(dict.fromkeys(a.get("skills") or []))
+        if not names:
+            raise OpError("select at least one skill")
+        if op == "pack_add_skills":
+            for s in names:
+                _check_skill(store, s)
+            new = [s for s in names if s not in p["skills"]]
+            if not new:
+                raise OpError(f"all selected skills are already in {a['pack']!r}")
+            p["skills"] += new
+        else:
+            gone = [s for s in names if s in p["skills"]]
+            if not gone:
+                raise OpError(f"none of the selected skills is in {a['pack']!r}")
+            p["skills"] = [s for s in p["skills"] if s not in gone]
+        return list(p["paths"])
     if op == "attach":
         p = _check_pack(data, a["pack"])
         folder = _check_folder(a["folder"])
@@ -563,7 +582,8 @@ class Model:
                     res["errors"].append(f"{p['folder']}: {e}")
             if op in ("router_remove", "delete_pack"):
                 self.routers.delete(args["pack"])  # after its links are gone
-            if op in ("pack_add_skill", "pack_remove_skill") and router_of(after["packs"][args["pack"]]):
+            if op in ("pack_add_skill", "pack_remove_skill", "pack_add_skills", "pack_remove_skills") \
+                    and router_of(after["packs"][args["pack"]]):
                 self.write_router(after, args["pack"], {})  # keep the table in step with the pack
                 res["log"].append(f"router {router_name(args['pack'])} updated")
             return res

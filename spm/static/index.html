@@ -85,6 +85,8 @@ td.desc { color: var(--muted); font-size: 12px; max-width: 520px; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+.bulkbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 14px; margin: 0 0 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+tr.picked td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 code.ver { font-size: 12px; background: var(--chip); padding: 1px 6px; border-radius: 4px; }
 .toggles { display: inline-flex; gap: 4px; }
 .tgl { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
@@ -123,7 +125,7 @@ pre.preview { background: var(--panel2); padding: 10px; border-radius: 6px; max-
 "use strict";
 const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
 const S = { tab: "folders", state: null, folder: null, pack: null, folderView: null,
-            filter: "", skillFilter: "all", skillQuery: "", scan: null, scanOnlyMissing: true, scanWorktrees: false, newFolder: null };
+            filter: "", skillFilter: "all", skillQuery: "", scan: null, scanOnlyMissing: true, scanWorktrees: false, newFolder: null, selected: new Set(), lastPick: null };
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -250,6 +252,7 @@ function showPreview(res, title) {
 }
 
 async function op(name, args, title) {
+  let applied = false;
   await guard(async () => {
     const pre = await api("/api/op", { op: name, args, dry: true });
     if (planChanges(pre) || pre.warnings.length || pre.plans.some(p => p.conflicts.length || p.mcp_conflicts.length || p.mcp_warnings.length)) {
@@ -259,8 +262,10 @@ async function op(name, args, title) {
     const n = planChanges(res);
     if (res.errors.length) toast(`${title}: saved, but some changes failed (Sync retries them): ${res.errors.join(" | ")}`, true);
     else toast(`${title}: done${n ? `, ${plural(n, "change")}` : ""}`);
+    applied = true;
     await refresh();
   });
+  return applied;
 }
 
 // ---------------------------------------------------------------- loading
@@ -653,6 +658,30 @@ function renderSkills() {
   const packSel = h("select", {}, h("option", { value: "" }, "Add to pack…"), ...st.packs.map(p => h("option", { value: p.name }, p.name)));
   const counted = !!usage._at;  // usage columns only after a count
   const head = ["Skill", "Description", "Source", "Global", "Packs", counted ? "Uses" : null, counted ? "Last used" : null, ""].filter(x => x !== null);
+
+  // selection for bulk add/remove; survives searching and filtering
+  const known = new Set(st.skills.map(s => s.dir));
+  for (const d of [...S.selected]) if (!known.has(d)) S.selected.delete(d);
+  const shown = rows.map(s => s.dir);
+  const shownSel = shown.filter(d => S.selected.has(d)).length;
+  const all = h("input", { type: "checkbox", title: "Select all shown", "aria-label": "Select all shown skills",
+    checked: shown.length > 0 && shownSel === shown.length });
+  all.indeterminate = shownSel > 0 && shownSel < shown.length;
+  all.addEventListener("change", () => {
+    if (shownSel === shown.length) shown.forEach(d => S.selected.delete(d)); else shown.forEach(d => S.selected.add(d));
+    renderSkills();
+  });
+  const pick = (s, i, e) => {
+    const on = !S.selected.has(s.dir);
+    if (e.shiftKey && S.lastPick != null && shown[S.lastPick] !== undefined) {  // range
+      const [a, b] = [Math.min(S.lastPick, i), Math.max(S.lastPick, i)];
+      for (let k = a; k <= b; k++) on ? S.selected.add(shown[k]) : S.selected.delete(shown[k]);
+    } else {
+      on ? S.selected.add(s.dir) : S.selected.delete(s.dir);
+    }
+    S.lastPick = i;
+    renderSkills();
+  };
   fill($("detail"),
     h("div", { class: "row" }, h("h2", { style: "flex:1" }, "Skills"),
       sa ? h("button", { class: "btn primary", onclick: installFromRepo }, "Install from repository") : null,
@@ -667,13 +696,17 @@ function renderSkills() {
     job.error ? h("p", { class: "b-bad" }, job.error) : null,
     h("div", { class: "row", style: "margin:12px 0" }, seg,
       h("input", { placeholder: "Search name, description or repo", value: S.skillQuery, style: "width:300px",
-        oninput: e => { S.skillQuery = e.target.value; renderSkills(); const i = $("detail").querySelector("input"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } })),
-    rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ...head.map(t => h("th", {}, t)))),
-      h("tbody", {}, ...rows.map(s => {
+        oninput: e => { S.skillQuery = e.target.value; renderSkills(); const i = $("detail").querySelector("input[placeholder^='Search']"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } })),
+    S.selected.size ? bulkBar(shown) : null,
+    rows.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", { style: "width:1%" }, all), ...head.map(t => h("th", {}, t)))),
+      h("tbody", {}, ...rows.map((s, i) => {
         const u = usage[s.dir];
         const sel = packSel.cloneNode(true);
         sel.addEventListener("change", () => { if (sel.value) op("pack_add_skill", { pack: sel.value, skill: s.dir }, `Add ${s.dir} to ${sel.value}`); });
-        return h("tr", {},
+        const box = h("input", { type: "checkbox", "aria-label": `Select ${s.dir}`, checked: S.selected.has(s.dir) });
+        box.addEventListener("click", e => { e.preventDefault(); pick(s, i, e); });
+        return h("tr", { class: S.selected.has(s.dir) ? "picked" : "" },
+          h("td", {}, box),
           h("td", { style: "white-space:nowrap" }, s.dir, s.name !== s.dir ? h("div", { class: "muted", style: "font-size:11px" }, s.name) : null),
           h("td", { class: "desc" }, s.description.slice(0, 200)),
           h("td", {}, sourceCell(s)),
@@ -689,6 +722,36 @@ function renderSkills() {
             sa ? h("button", { class: "btn danger", title: "Remove from the store", onclick: () => removeSkill(s) }, "×") : null)));
       }))) : h("div", { class: "empty" }, sa && !st.skills.length ? "The store is empty. Install skills from a repository to start." : "No skills match"));
 }
+function bulkBar(shown) {
+  const st = S.state, picked = [...S.selected].sort();
+  const hidden = picked.filter(d => !shown.includes(d)).length;
+  const addSel = h("select", {}, h("option", { value: "" }, "Add to pack…"), ...st.packs.map(p => {
+    const n = picked.filter(d => !p.skills.includes(d)).length;
+    return h("option", { value: p.name, disabled: !n }, n ? `${p.name} (+${n})` : `${p.name} (all already in)`);
+  }));
+  const inPacks = st.packs.filter(p => picked.some(d => p.skills.includes(d)));
+  const remSel = h("select", { disabled: !inPacks.length }, h("option", { value: "" }, inPacks.length ? "Remove from pack…" : "In no pack"),
+    ...inPacks.map(p => h("option", { value: p.name }, `${p.name} (−${picked.filter(d => p.skills.includes(d)).length})`)));
+  addSel.addEventListener("change", () => addSel.value && bulk("pack_add_skills", addSel.value, picked));
+  remSel.addEventListener("change", () => remSel.value && bulk("pack_remove_skills", remSel.value, picked));
+  return h("div", { class: "bulkbar" },
+    h("b", {}, `${plural(picked.length, "skill")} selected`),
+    hidden ? h("span", { class: "muted", title: picked.filter(d => !shown.includes(d)).join(", ") }, `(${hidden} not shown by the current search)`) : null,
+    addSel, remSel,
+    shown.length && shown.some(d => !S.selected.has(d))
+      ? h("button", { class: "btn", onclick: () => { shown.forEach(d => S.selected.add(d)); renderSkills(); } }, `Select all ${shown.length} shown`) : null,
+    h("button", { class: "btn", onclick: () => { S.selected.clear(); S.lastPick = null; renderSkills(); } }, "Clear selection"),
+    h("span", { class: "muted", style: "font-size:12px" }, "Shift+click selects a range"));
+  function bulk(opName, pack, skills) {
+    const p = st.packs.find(x => x.name === pack);
+    const changing = opName === "pack_add_skills" ? skills.filter(d => !p.skills.includes(d)) : skills.filter(d => p.skills.includes(d));
+    const verb = opName === "pack_add_skills" ? `Add ${plural(changing.length, "skill")} to` : `Remove ${plural(changing.length, "skill")} from`;
+    op(opName, { pack, skills: changing }, `${verb} ${pack}`).then(ok => {
+      if (ok) { S.selected.clear(); S.lastPick = null; renderSkills(); } else renderSkills();
+    });
+  }
+}
+
 function pollUsage() {
   const t = setInterval(() => guard(async () => {
     await refresh();

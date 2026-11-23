@@ -134,6 +134,26 @@ class Operations(Env):
         self.assertEqual(len(self.linked(self.other, "beta")), 3)
         self.store_intact()
 
+    def test_bulk_add_and_remove_skills(self):
+        self.m.run("attach", {"pack": "one", "folder": str(self.proj)}, dry=False)
+        pre = self.m.run("pack_add_skills", {"pack": "one", "skills": ["alpha", "gamma", "delta", "gamma"]}, dry=True)
+        self.assertEqual(sorted({x[1] for x in pre["plans"][0]["add"]}), ["delta", "gamma"])  # alpha already in
+        self.m.run("pack_add_skills", {"pack": "one", "skills": ["alpha", "gamma", "delta"]}, dry=False)
+        self.assertEqual(json.loads(self.packs.read_text())["packs"]["one"]["skills"], ["alpha", "beta", "gamma", "delta"])
+        self.assertEqual(len(self.linked(self.proj, "delta")), 3)
+        self.m.run("pack_remove_skills", {"pack": "one", "skills": ["beta", "delta", "not-in-pack"]}, dry=False)
+        self.assertEqual(json.loads(self.packs.read_text())["packs"]["one"]["skills"], ["alpha", "gamma"])
+        self.assertEqual(self.linked(self.proj, "delta"), [])
+        self.store_intact()
+        with self.assertRaises(OpError):
+            self.m.run("pack_add_skills", {"pack": "one", "skills": ["alpha"]})  # nothing new
+        with self.assertRaises(OpError):
+            self.m.run("pack_remove_skills", {"pack": "one", "skills": ["delta"]})  # none of them in the pack
+        with self.assertRaises(OpError):
+            self.m.run("pack_add_skills", {"pack": "one", "skills": ["nope"]})
+        with self.assertRaises(OpError):
+            self.m.run("pack_add_skills", {"pack": "one", "skills": []})
+
     def test_extra_skill_add_and_remove(self):
         self.m.run("extra_add", {"folder": str(self.proj), "skill": "delta"}, dry=False)
         self.assertEqual(len(self.linked(self.proj, "delta")), 3)
