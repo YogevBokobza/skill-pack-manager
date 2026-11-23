@@ -55,6 +55,7 @@ class App:
             cfg = Config.default(s["scan_roots"])
         g = s["agents"]["gemini"]
         cfg.gemini = g if g is not None else cfg.gemini_home.is_dir()
+        cfg.agents = tuple(a for a in ("claude", "opencode", "codex") if s["agents"][a] is not False)
         if s["mode"] == "standalone":
             source = self.local_source(cfg)
         else:  # cc-switch, or not chosen yet (the UI shows the first-run question)
@@ -64,13 +65,12 @@ class App:
     def local_source(self, cfg: Config) -> LocalSource:
         h = cfg.home
         dirs = {"claude": h / ".claude" / "skills", "opencode": h / ".config" / "opencode" / "skills",
-                "codex": h / ".codex" / "skills"}
-        if cfg.gemini:
-            dirs["gemini"] = cfg.gemini_home / "skills"
+                "codex": h / ".codex" / "skills", "gemini": cfg.gemini_home / "skills"}
+        on = set(cfg.agents) | ({"gemini"} if cfg.gemini else set())
+        gm = mcp.global_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.opencode_dir, cfg.gemini_home)
         return LocalSource(
-            self.data_dir / "store", global_skill_dirs=dirs,
-            global_mcp=mcp.global_adapters(cfg.claude_json, cfg.claude_cli, cfg.codex_global, cfg.opencode_dir,
-                                           cfg.gemini_home if cfg.gemini else None))
+            self.data_dir / "store", global_skill_dirs={k: v for k, v in dirs.items() if k in on},
+            global_mcp={k: v for k, v in gm.items() if k in on})
 
     def migrate(self, b: dict) -> dict:
         cfg = self.model.cfg
@@ -102,8 +102,8 @@ class App:
             "updates": self.cached_updates() if s["mode"] == "standalone" else {},
             "settings": {"mode": s["mode"], "theme": s["theme"], "scan_roots": [str(r) for r in cfg.scan_roots],
                          "auto_update_check": s["auto_update_check"],
-                         "agents": {"gemini": s["agents"]["gemini"], "gemini_found": cfg.gemini_home.is_dir(),
-                                    "gemini_on": cfg.gemini},
+                         "agents": {**s["agents"], "gemini_found": cfg.gemini_home.is_dir(),
+                                    "gemini_on": cfg.gemini, "on": list(self.model.agents)},
                          "scan_roots_custom": s["scan_roots"] is not None,
                          "ai": {"writer": (s.get("ai") or {}).get("writer", "template"),
                                 "models": (s.get("ai") or {}).get("models", {}),
@@ -408,12 +408,16 @@ def make_handler(app: App, port_ref: dict):
             if not self._allowed():
                 return self._json(403, {"error": "forbidden"})
             try:
-                self._json(200, fn())
+                code, body = 200, fn()
             except USER_ERRORS as e:
-                self._json(400, {"error": str(e).strip("'\"")})
+                code, body = 400, {"error": str(e).strip("'\"")}
             except Exception as e:
                 traceback.print_exc()
-                self._json(500, {"error": f"{type(e).__name__}: {e}"})
+                code, body = 500, {"error": f"{type(e).__name__}: {e}"}
+            try:
+                self._json(code, body)
+            except ConnectionError:
+                pass  # the page closed or reloaded before the answer arrived; nobody is left to tell
 
         def do_GET(self):
             u = urlparse(self.path)

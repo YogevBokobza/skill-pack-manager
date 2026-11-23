@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 MODES = ("cc-switch", "standalone")
+AGENTS = ("claude", "opencode", "codex", "gemini")
 THEMES = ("light", "dark", "system")
 
 
@@ -25,8 +26,10 @@ class Settings:
         if not isinstance(s.get("scan_roots"), list):
             s["scan_roots"] = None  # None = platform defaults
         agents = s.get("agents") if isinstance(s.get("agents"), dict) else {}
-        # None: decide by whether the agent is installed (its home folder exists)
-        s["agents"] = {"gemini": agents.get("gemini") if isinstance(agents.get("gemini"), bool) else None}
+        # true/false: switched on/off in Settings. None: the default, which is
+        # on for Claude Code, OpenCode and Codex, and for Gemini CLI on when
+        # ~/.gemini exists
+        s["agents"] = {a: agents.get(a) if isinstance(agents.get(a), bool) else None for a in AGENTS}
         if not isinstance(s.get("auto_update_check"), bool):
             s["auto_update_check"] = True  # standalone: check skill updates once a day when the app opens
         return s
@@ -43,10 +46,12 @@ class Settings:
             s["mode"] = body["mode"]
         if "agents" in body:
             a = body["agents"] if isinstance(body["agents"], dict) else {}
-            if "gemini" in a:
-                if a["gemini"] is not None and not isinstance(a["gemini"], bool):
-                    raise ValueError("agents.gemini must be true, false or null")
-                s["agents"]["gemini"] = a["gemini"]
+            for name, v in a.items():
+                if name not in AGENTS:
+                    raise ValueError(f"unknown agent {name!r}")
+                if v is not None and not isinstance(v, bool):
+                    raise ValueError(f"agents.{name} must be true, false or null")
+                s["agents"][name] = v
         if "auto_update_check" in body:
             if not isinstance(body["auto_update_check"], bool):
                 raise ValueError("auto_update_check must be true or false")

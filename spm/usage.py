@@ -189,12 +189,15 @@ def summarize(rows: list[tuple]) -> dict:
             "days": dict(sorted(by_day.items()))}
 
 
-def collect(names: set[str], home: Path | None = None, gemini_home: Path | None = None) -> dict[str, dict]:
+def collect(names: set[str], home: Path | None = None, gemini_home: Path | None = None,
+            agents: set[str] | None = None) -> dict[str, dict]:
     """names: skill folder names and skill names to count. Returns
     {name: {"uses", "last": "YYYY-MM-DD", "where": top 3 [folder, count],
     "folders": all [folder, count, last day], "agents": {agent: n}, "router": n,
     "days": {day: n}}} plus "_since": the earliest day the logs cover."""
     rows, since = events(names, home, gemini_home)
+    if agents is not None:  # only the agents that are switched on
+        rows = [r for r in rows if r[3] in agents]
     by: dict[str, list[tuple]] = collections.defaultdict(list)
     for r in rows:
         by[r[0]].append(r)

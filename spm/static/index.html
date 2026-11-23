@@ -268,11 +268,20 @@ function openModal(title, content, buttons, wide) {
 function showPreview(res, title) {
   const body = $("mbody"); fill(body, h("h2", {}, title));
   for (const w of res.warnings) body.append(h("p", { class: "b-warn" }, w));
+  const busy = p => p.add.length || p.remove.length || p.conflicts.length || p.missing.length || p.warnings.length ||
+    p.mcp_add.length || p.mcp_remove.length || p.mcp_conflicts.length || p.mcp_missing.length || p.mcp_warnings.length;
+  const quiet = res.plans.length > 1 ? res.plans.filter(p => !busy(p)).length : 0;
+  if (quiet) body.append(h("p", { class: "muted", style: "font-size:12px" }, `${plural(quiet, "folder")} already in sync, not listed.`));
   for (const p of res.plans) {
+    if (quiet && !busy(p)) continue;
     // links in .skill-packs/ come from an earlier router layout and are only removed;
     // skills behind a router now live inside it (p.routed lists them)
     const HID = ".skill-packs";
-    const vis = l => skillsOf(l.filter(x => x[0] !== HID)), hid = l => skillsOf(l.filter(x => x[0] === HID));
+    // links in the skills folder of an agent that is off are listed on their own
+    const offDir = x => x[0] !== HID && !(S.state.skill_dirs || []).includes(x[0]);
+    const offRem = {};
+    for (const x of p.remove.filter(offDir)) (offRem[x[0]] = offRem[x[0]] || []).push(x[1]);
+    const vis = l => skillsOf(l.filter(x => x[0] !== HID && !offDir(x))), hid = l => skillsOf(l.filter(x => x[0] === HID));
     const addV = vis(p.add), addH = hid(p.add), remV = vis(p.remove), remH = hid(p.remove);
     const routedNow = p.routed || [];
     const behind = remV.filter(s => routedNow.includes(s)), back = remH.filter(s => addV.includes(s));
@@ -282,6 +291,8 @@ function showPreview(res, title) {
     const ul = h("ul");
     if (add.length) ul.append(h("li", { class: "b-ok" }, `link ${plural(add.length, "skill")}: ${add.join(", ")}`));
     if (rem.length) ul.append(h("li", { class: "b-bad" }, `unlink ${plural(rem.length, "skill")}: ${rem.join(", ")}`));
+    for (const [dir, names] of Object.entries(offRem))
+      ul.append(h("li", { class: "b-bad" }, `unlink from ${dir} (its agent is off): ${[...new Set(names)].sort().join(", ")}`));
     if (behind.length) ul.append(h("li", { class: "b-info" }, `move behind the router (agents stop listing them): ${behind.join(", ")}`));
     if (back.length) ul.append(h("li", { class: "b-info" }, `bring back from behind the router: ${back.join(", ")}`));
     if (addHid.length) ul.append(h("li", { class: "b-ok" }, `add behind the router: ${addHid.join(", ")}`));
@@ -301,8 +312,8 @@ function showPreview(res, title) {
     box.append(ul); body.append(box);
   }
   body.append(h("p", { class: "muted", style: "font-size:12px" },
-    "Each skill is linked into .claude/skills, .opencode/skills and .agents/skills" + (agents().includes("gemini") ? " (Gemini CLI reads .agents/skills too)" : "") + ". Unlinking removes only the link; the skill in the store is never touched. " +
-    "MCP servers go to Claude (local scope, through the claude CLI), .opencode/opencode.json and .codex/config.toml" + (agents().includes("gemini") ? ", and .gemini/settings.json" : "") + ". Only entries whose name is in the catalog, in files git does not track, are ever removed."));
+    "Each skill is linked into " + ((S.state.skill_dirs || []).join(", ") || "no folder (every agent is off)") + (agents().includes("gemini") ? " (Gemini CLI reads .agents/skills)" : "") + ". Unlinking removes only the link; the skill in the store is never touched. " +
+    "MCP servers go to " + (agents().map(a => ({ claude: "Claude (local scope, through the claude CLI)", opencode: ".opencode/opencode.json", codex: ".codex/config.toml", gemini: ".gemini/settings.json" })[a]).join(", ") || "no agent") + ". Only entries whose name is in the catalog, in files git does not track, are ever removed; for an agent that is off, those entries are removed."));
   const nodes = [...body.childNodes].slice(1);
   return openModal(title, nodes, [{ label: "Cancel" }, { label: "Apply", primary: true, value: true }]);
 }
@@ -371,7 +382,9 @@ function renderFolders() {
   const q = S.filter.toLowerCase();
   const items = S.state.folders.filter(f => !q || f.folder.toLowerCase().includes(q) || f.packs.join(" ").includes(q));
   fill($("list"), 
-    listTools("Filter folders", h("button", { class: "btn primary", onclick: addFolder }, "+ Folder")),
+    listTools("Filter folders", h("span", { class: "row", style: "flex-wrap:nowrap" },
+      S.state.folders.some(f => f.exists && !f.in_sync) ? h("button", { class: "btn", title: "Sync every folder that is out of sync, with one preview", onclick: () => op("sync_all", {}, "Sync all folders") }, "Sync all") : null,
+      h("button", { class: "btn primary", onclick: addFolder }, "+ Folder"))),
     ...items.map(f => h("div", { class: "item" + (S.folder === f.folder ? " sel" : ""), role: "button", tabindex: "0", "aria-label": f.folder, onclick: () => selectFolder(f.folder), onkeydown: e => { if (e.key === "Enter") selectFolder(f.folder); } },
       h("div", { class: "t" }, statusDot(f), base(f.folder)),
       h("div", { class: "p" }, f.folder),
@@ -1471,16 +1484,44 @@ function renderSettings() {
         h("tr", {}, h("td", { class: "muted" }, k), h("td", { style: "word-break:break-all" }, v),
           h("td", {}, h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: v.replace(/[\\/][^\\/]*\.json$/, "") })) }, "Open")))))));
 }
+const AGENT_NAME = { claude: "Claude Code", opencode: "OpenCode", codex: "Codex", gemini: "Gemini CLI" };
+const AGENT_WHAT = {
+  claude: "skills in .claude/skills, MCP servers in Claude's local scope",
+  opencode: "skills in .opencode/skills, MCP servers in .opencode/opencode.json",
+  codex: "skills in .agents/skills, MCP servers in .codex/config.toml",
+  gemini: "skills in .agents/skills (shared with Codex), MCP servers in .gemini/settings.json",
+};
 function agentSettings(a) {
-  const sel = h("select", { "aria-label": "Gemini CLI" },
-    h("option", { value: "auto", selected: a.gemini === null }, `Automatic (${a.gemini_found ? "on: ~/.gemini found" : "off: ~/.gemini not found"})`),
-    h("option", { value: "on", selected: a.gemini === true }, "On"), h("option", { value: "off", selected: a.gemini === false }, "Off"));
-  sel.addEventListener("change", () => guard(async () => {
-    await api("/api/settings", { agents: { gemini: sel.value === "auto" ? null : sel.value === "on" } }); await refresh(); }));
+  const row = name => {
+    const auto = name === "gemini";
+    const cur = a[name] === null ? (auto ? "auto" : "on") : a[name] ? "on" : "off";
+    const sel = h("select", { "aria-label": AGENT_NAME[name] },
+      auto ? h("option", { value: "auto", selected: cur === "auto" }, `Automatic (${a.gemini_found ? "on: ~/.gemini found" : "off: ~/.gemini not found"})`) : null,
+      h("option", { value: "on", selected: cur === "on" }, "On"), h("option", { value: "off", selected: cur === "off" }, "Off"));
+    sel.addEventListener("change", () => guard(async () => {
+      const v = sel.value === "auto" ? null : sel.value === "on";
+      await api("/api/settings", { agents: { [name]: v } });
+      await refresh();
+      const off = !S.state.agents.includes(name);
+      const stale = S.state.folders.filter(f => f.exists && !f.in_sync).length;
+      if (off && stale) await offerSyncAll(`${AGENT_NAME[name]} is off. ${plural(stale, "folder")} still ${stale === 1 ? "has" : "have"} what this app added for it.`);
+    }));
+    const on = a.on.includes(name);
+    return h("div", { class: "row", style: "margin-bottom:6px" }, h("span", { style: "width:150px" }, AGENT_NAME[name]), sel,
+      h("span", { class: "badge" + (on ? " b-ok" : "") }, on ? "managed" : "off"),
+      h("span", { class: "muted", style: "font-size:12px" }, AGENT_WHAT[name]));
+  };
   return h("div", {}, h("h3", {}, "Agents"),
-    h("p", { class: "muted", style: "font-size:12px" }, "Claude Code, OpenCode and Codex are always managed. Gemini CLI reads project skills from .agents/skills, so it gets them either way; turning it on adds its MCP servers (.gemini/settings.json), its global skills (~/.gemini/skills), its column in context cost, and its sessions in usage counts."),
-    h("div", { class: "row" }, h("span", { style: "width:150px" }, "Gemini CLI"), sel,
-      a.gemini_on ? h("span", { class: "badge b-ok" }, "managed") : h("span", { class: "badge" }, "not managed")));
+    h("p", { class: "muted", style: "font-size:12px" }, "Switch off an agent you don't use: it gets no skills or MCP servers, drops out of the columns, costs and usage, and causes no warnings. ",
+      "Sync then removes what this app added for it in each folder (with a preview). Its global switches and anything you added yourself stay."),
+    ...["claude", "opencode", "codex", "gemini"].map(row));
+}
+async function offerSyncAll(why) {
+  const ok = await openModal("Clean up the folders?", [
+    h("p", {}, why),
+    h("p", { class: "muted" }, "Sync all shows every link and MCP entry it would remove, folder by folder, before it changes anything."),
+  ], [{ label: "Later" }, { label: "Sync all…", primary: true, value: true }]);
+  if (ok) await op("sync_all", {}, "Sync all folders");
 }
 async function migrateFromCcSwitch() {
   await guard(async () => {
