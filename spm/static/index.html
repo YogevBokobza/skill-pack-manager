@@ -187,7 +187,8 @@ function planChanges(res) {
   return res.plans.reduce((n, p) => n + p.add.length + p.remove.length + p.mcp_add.length + p.mcp_remove.length, 0);
 }
 function skillsOf(list) { return [...new Set(list.map(x => x[1]))]; }
-const CLIENT_LABEL = { claude: "Claude", opencode: "OpenCode", codex: "Codex" };
+const CLIENT_LABEL = { claude: "Claude", opencode: "OpenCode", codex: "Codex", gemini: "Gemini" };
+const agents = () => (S.state && S.state.agents) || ["claude", "opencode", "codex"];
 function mcpByServer(list) {
   const m = {};
   for (const [c, n] of list) (m[n] = m[n] || []).push(CLIENT_LABEL[c]);
@@ -255,8 +256,8 @@ function showPreview(res, title) {
     box.append(ul); body.append(box);
   }
   body.append(h("p", { class: "muted", style: "font-size:12px" },
-    "Each skill is linked into .claude/skills, .opencode/skills and .agents/skills. Unlinking removes only the link; the skill in the store is never touched. " +
-    "MCP servers go to Claude (local scope, through the claude CLI), .opencode/opencode.json and .codex/config.toml. Only entries whose name is in the catalog, in files git does not track, are ever removed."));
+    "Each skill is linked into .claude/skills, .opencode/skills and .agents/skills" + (agents().includes("gemini") ? " (Gemini CLI reads .agents/skills too)" : "") + ". Unlinking removes only the link; the skill in the store is never touched. " +
+    "MCP servers go to Claude (local scope, through the claude CLI), .opencode/opencode.json and .codex/config.toml" + (agents().includes("gemini") ? ", and .gemini/settings.json" : "") + ". Only entries whose name is in the catalog, in files git does not track, are ever removed."));
   const nodes = [...body.childNodes].slice(1);
   return openModal(title, nodes, [{ label: "Cancel" }, { label: "Apply", primary: true, value: true }]);
 }
@@ -403,12 +404,12 @@ function mcpSection(v) {
       v.mcp_extras.length ? null : h("span", { class: "muted" }, "no extra servers (servers from packs are listed below)")),
     h("div", { style: "margin-top:10px" }, mcpAdder("Add MCP to this folder", m => op("mcp_extra_add", { folder: f, mcp: m }, `Add MCP ${m}`))),
     v.mcp.length ? h("table", { style: "margin-top:10px" },
-      h("thead", {}, h("tr", {}, ...["Server", "From", "Status", "Claude", "OpenCode", "Codex"].map(t => h("th", {}, t)))),
+      h("thead", {}, h("tr", {}, ...["Server", "From", "Status", ...agents().map(a => CLIENT_LABEL[a])].map(t => h("th", {}, t)))),
       h("tbody", {}, ...v.mcp.map(m => h("tr", {},
         h("td", {}, m.name, m.global.length ? h("div", { class: "b-warn", style: "font-size:11px" }, `also global in ${m.global.map(c => CLIENT_LABEL[c]).join(", ")}`) : null),
         h("td", {}, h("div", { class: "chips", style: "margin:0" }, ...m.sources.map(x => h("span", { class: "chip" }, x === "+extra" ? "extra" : x)))),
         h("td", {}, h("span", { class: MSTATUS[m.status][1] }, MSTATUS[m.status][0])),
-        ...["claude", "opencode", "codex"].map(c => h("td", {}, clientCell(m.clients[c]))))))) : null);
+        ...agents().map(c => h("td", {}, clientCell(m.clients[c]))))))) : null);
 }
 
 function renderFolderDetail() {
@@ -435,7 +436,7 @@ function renderFolderDetail() {
       h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: f })) }, "Open folder"),
       v.in_sync ? null : h("button", { class: "btn primary", onclick: () => op("sync", { folder: f }, "Sync folder") }, "Sync")),
     v.cost && v.cost.claude ? h("div", { class: "costline", title: "Estimated tokens of skill names and descriptions each agent lists in every session here, global skills included" },
-      "Skill listings per session: ", AGENTS.map(a => `${CLIENT_LABEL[a]} ≈ ${num(v.cost[a].tokens)} tokens (${plural(v.cost[a].count, "skill")})`).join(" · "),
+      "Skill listings per session: ", agents().map(a => `${CLIENT_LABEL[a]} ≈ ${num(v.cost[a].tokens)} tokens (${plural(v.cost[a].count, "skill")})`).join(" · "),
       " · ", h("a", { href: "#", onclick: e => { e.preventDefault(); S.tab = "usage"; render(); loadInsights(); } }, "details")) : null,
     v.exists ? null : h("p", { class: "b-bad" }, "This folder does not exist any more. Detach its packs to clean up packs.json."),
     S.newFolder === f ? h("p", { class: "muted" }, "New folder: attach a pack or add a skill to start managing it.") : null,
@@ -616,7 +617,6 @@ function aiSettings(ai) {
 }
 
 // Skills ----------------------------------------------------------------
-const CLIENTS = ["claude", "opencode", "codex"];
 const shortUrl = u => (u || "").replace(/^https?:\/\//, "").replace(/^git@([^:]+):/, "$1/").replace(/\.git$/, "");
 const standalone = () => S.state.mode === "standalone";
 
@@ -625,7 +625,7 @@ function globalCell(item, kind) {
   if (!standalone()) {
     return h("div", { class: "chips", style: "margin:0" }, ...item.global.map(c => h("span", { class: "chip b-ok" }, CLIENT_LABEL[c])));
   }
-  return h("div", { class: "toggles" }, ...CLIENTS.map(c => {
+  return h("div", { class: "toggles" }, ...agents().map(c => {
     const on = item.global.includes(c);
     return h("button", { class: "tgl" + (on ? " on" : ""), "aria-pressed": String(on), title: `${on ? "Disable" : "Enable"} globally for ${CLIENT_LABEL[c]}`,
       onclick: () => guard(async () => {
@@ -780,7 +780,6 @@ function pollUsage() {
 
 // Usage -----------------------------------------------------------------
 const num = n => Number(n || 0).toLocaleString();
-const AGENTS = ["claude", "opencode", "codex"];
 async function loadInsights() {
   await guard(async () => { S.insights = await api(`/api/insights?days=${S.usageDays}`); render(); });
 }
@@ -861,7 +860,7 @@ function renderUsage() {
       h("div", { class: "stat" }, h("b", {}, `${used.length} / ${st.skills.length}`), h("span", {}, "skills used")),
       h("div", { class: "stat" }, h("b", { class: skills.length - used.length ? "b-warn" : "" }, skills.length - used.length), h("span", {}, "never used")),
       h("div", { class: "stat" }, h("b", {}, num(viaRouter)), h("span", {}, "through a router")),
-      ...AGENTS.filter(a => byAgent[a]).map(a => h("div", { class: "stat" }, h("b", {}, num(byAgent[a])), h("span", {}, CLIENT_LABEL[a]))))
+      ...agents().filter(a => byAgent[a]).map(a => h("div", { class: "stat" }, h("b", {}, num(byAgent[a])), h("span", {}, CLIENT_LABEL[a]))))
       : h("div", { class: "card", style: "margin-top:12px" }, "Count usage to see which skills your agents use. It reads your past sessions on this computer; nothing leaves it."),
     counted ? h("div", {}, h("h3", {}, "Uses per week"), weekBars(usage)) : null,
 
@@ -874,17 +873,17 @@ function renderUsage() {
     h("h3", {}, "Context cost per session (estimate)"),
     h("p", { class: "muted", style: "font-size:12px" }, "Every skill an agent can see puts its name and description into every session. ",
       "Estimated at about 4 characters per token, from the skills folders each agent reads (global ones and the project's). Built-in and plugin skills are not counted."),
-    costs ? h("table", {}, h("thead", {}, h("tr", {}, ...["Where", "Claude", "OpenCode", "Codex", "Routers", ""].map(t => h("th", {}, t)))),
+    costs ? h("table", {}, h("thead", {}, h("tr", {}, ...["Where", ...agents().map(a => CLIENT_LABEL[a]), "Routers", ""].map(t => h("th", {}, t)))),
       h("tbody", {},
         h("tr", {}, h("td", {}, h("b", {}, "Outside projects"), h("div", { class: "muted", style: "font-size:11px" }, "global skills only")),
-          ...AGENTS.map(a => h("td", {}, costCell(costs.global[a]))), h("td", {}), h("td", {})),
+          ...agents().map(a => h("td", {}, costCell(costs.global[a]))), h("td", {}), h("td", {})),
         ...costs.folders.map(f => {
           const saved = f.packs.reduce((n, p) => n + p.saved, 0), could = f.packs.reduce((n, p) => n + p.could_save, 0);
           const listing = {};
-          for (const a of AGENTS) for (const s of f.agents[a].skills) (listing[s.skill] = listing[s.skill] || { ...s, agents: [] }).agents.push(CLIENT_LABEL[a]);
+          for (const a of agents()) for (const s of f.agents[a].skills) (listing[s.skill] = listing[s.skill] || { ...s, agents: [] }).agents.push(CLIENT_LABEL[a]);
           return h("tr", {},
             h("td", { style: "word-break:break-all" }, linkish(f.folder)),
-            ...AGENTS.map(a => h("td", {}, costCell(f.agents[a]))),
+            ...agents().map(a => h("td", {}, costCell(f.agents[a]))),
             h("td", { style: "font-size:12px" }, saved ? h("div", { class: "b-ok" }, `saves ≈ ${num(saved)}`) : null,
               could ? h("div", { class: "b-warn", title: "Estimated saving if the packs without a router got one" }, `could save ≈ ${num(could)}`) : null,
               !saved && !could ? h("span", { class: "muted" }, "–") : null),
@@ -900,12 +899,12 @@ function renderUsage() {
           h("button", { "aria-pressed": String(S.usageUnused === k), onclick: () => { S.usageUnused = k; renderUsage(); } }, l))),
         h("input", { placeholder: "Filter skills", value: S.usageQuery, style: "width:200px",
           oninput: e => { S.usageQuery = e.target.value; renderUsage(); const i = $("detail").querySelector("input[placeholder='Filter skills']"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } })),
-      rows.length ? h("table", { style: "margin-top:8px" }, h("thead", {}, h("tr", {}, ...(S.usageUnused ? ["Skill", "Global", "Packs", "≈ Tokens"] : ["Skill", "Uses", ...AGENTS.map(a => CLIENT_LABEL[a]), "Via router", "Last used", "Where"]).map(t => h("th", {}, t)))),
+      rows.length ? h("table", { style: "margin-top:8px" }, h("thead", {}, h("tr", {}, ...(S.usageUnused ? ["Skill", "Global", "Packs", "≈ Tokens"] : ["Skill", "Uses", ...agents().map(a => CLIENT_LABEL[a]), "Via router", "Last used", "Where"]).map(t => h("th", {}, t)))),
         h("tbody", {}, ...rows.map(s => S.usageUnused
           ? h("tr", {}, h("td", {}, s.dir), h("td", {}, s.global.map(c => CLIENT_LABEL[c]).join(", ") || h("span", { class: "muted" }, "–")),
               h("td", {}, s.packs.join(", ") || h("span", { class: "muted" }, "–")), h("td", {}, num(s.tokens)))
           : h("tr", {}, h("td", { style: "white-space:nowrap" }, s.dir), h("td", {}, h("b", {}, num(s.u.uses))),
-              ...AGENTS.map(a => h("td", {}, (s.u.agents || {})[a] ? num(s.u.agents[a]) : h("span", { class: "muted" }, "–"))),
+              ...agents().map(a => h("td", {}, (s.u.agents || {})[a] ? num(s.u.agents[a]) : h("span", { class: "muted" }, "–"))),
               h("td", {}, s.u.router ? num(s.u.router) : h("span", { class: "muted" }, "–")),
               h("td", { style: "white-space:nowrap" }, s.u.last),
               h("td", { class: "desc" }, (s.u.folders || s.u.where || []).slice(0, 3).map(([f, n]) => `${f === "?" ? "unknown" : base(f)} (${n})`).join(", ")))))) : h("p", { class: "muted" }, "No skills"),
@@ -1229,12 +1228,24 @@ function renderSettings() {
         onchange: e => guard(async () => { await api("/api/settings", { auto_update_check: e.target.checked }); await refresh(); }) }),
         "Check for updates once a day when the app opens"),
       h("p", { class: "muted", style: "font-size:12px" }, "It only looks: an update is installed after you review its changes.")) : null,
+    agentSettings(set.agents),
     aiSettings(set.ai),
     h("h3", {}, "Files"),
     h("table", {}, h("tbody", {},
       ...[["Packs", st.config.packs], ["Skill store", st.config.store], ["Data folder (settings, catalog, backups, log)", st.config.data]].map(([k, v]) =>
         h("tr", {}, h("td", { class: "muted" }, k), h("td", { style: "word-break:break-all" }, v),
           h("td", {}, h("button", { class: "btn", onclick: () => guard(() => api("/api/open", { path: v.replace(/[\\/][^\\/]*\.json$/, "") })) }, "Open")))))));
+}
+function agentSettings(a) {
+  const sel = h("select", { "aria-label": "Gemini CLI" },
+    h("option", { value: "auto", selected: a.gemini === null }, `Automatic (${a.gemini_found ? "on: ~/.gemini found" : "off: ~/.gemini not found"})`),
+    h("option", { value: "on", selected: a.gemini === true }, "On"), h("option", { value: "off", selected: a.gemini === false }, "Off"));
+  sel.addEventListener("change", () => guard(async () => {
+    await api("/api/settings", { agents: { gemini: sel.value === "auto" ? null : sel.value === "on" } }); await refresh(); }));
+  return h("div", {}, h("h3", {}, "Agents"),
+    h("p", { class: "muted", style: "font-size:12px" }, "Claude Code, OpenCode and Codex are always managed. Gemini CLI reads project skills from .agents/skills, so it gets them either way; turning it on adds its MCP servers (.gemini/settings.json), its global skills (~/.gemini/skills), its column in context cost, and its sessions in usage counts."),
+    h("div", { class: "row" }, h("span", { style: "width:150px" }, "Gemini CLI"), sel,
+      a.gemini_on ? h("span", { class: "badge b-ok" }, "managed") : h("span", { class: "badge" }, "not managed")));
 }
 async function migrateFromCcSwitch() {
   await guard(async () => {

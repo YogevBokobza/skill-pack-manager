@@ -3,6 +3,8 @@
   Claude Code  ~/.claude/projects/**/*.jsonl   Skill tool calls and /slash commands
   OpenCode     ~/.local/share/opencode/opencode.db   parts with tool "skill"
   Codex        ~/.codex/sessions/**/*.jsonl    reads of .../skills/<name>/SKILL.md
+  Gemini CLI   ~/.gemini/tmp/<project>/chats/*.json[l]   activate_skill tool calls
+               (~/.gemini/projects.json maps project folders to <project>)
 
 Skills behind a pack router are not called by name: the agent reads
 using-<pack>/references/<name>/<name>.md. Those reads count too, with
@@ -11,6 +13,7 @@ via "router".
 from __future__ import annotations
 
 import collections
+import hashlib
 import json
 import re
 import sqlite3
@@ -24,7 +27,9 @@ CODEX_READ = re.compile(r"skills[\\/]+([A-Za-z0-9_.-]+)[\\/]+SKILL\.md")
 # using-<pack>/references/<name>/<name>.md, with / or (JSON-escaped) \ separators
 ROUTER_READ = re.compile(r"using-[a-z0-9-]+[\\/]+references[\\/]+([A-Za-z0-9_.-]+)[\\/]+\1\.md")
 CWD = re.compile(r'"cwd":"([^"]+)"')
-AGENTS = ("claude", "opencode", "codex")
+GEMINI_CALL = re.compile(r'"name"\s*:\s*"activate_skill"[^{}]*?"args"\s*:\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"')
+TIMESTAMP = re.compile(r'"(?:timestamp|startTime)"\s*:\s*"(\d{4}-\d{2}-\d{2})')
+AGENTS = ("claude", "opencode", "codex", "gemini")
 
 
 def _first_cwd(line: str, cwd):
@@ -38,7 +43,8 @@ def _day(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
 
 
-def events(names: set[str], home: Path | None = None) -> tuple[list[tuple], str | None]:
+def events(names: set[str], home: Path | None = None,
+           gemini_home: Path | None = None) -> tuple[list[tuple], str | None]:
     """Every use of a skill in names: (skill, day, cwd, agent, via), via being
     "call" or "router". Also returns the earliest day the logs cover, or None."""
     home = home or Path.home()
@@ -127,8 +133,44 @@ def events(names: set[str], home: Path | None = None) -> tuple[list[tuple], str 
         for s in routed - seen:
             add(s, day, cwd, "codex", "router")
 
+    if gemini_home is not None:
+        _gemini(gemini_home, add, oldest)
+
     first += [r[1] for r in out if r[1] != "?"]
     return out, (min(first) if first else None)
+
+
+def _gemini(gh: Path, add, oldest) -> None:
+    """Gemini CLI keeps one file per session under tmp/<project>/chats/. The
+    project folder is named by a slug (projects.json maps folder -> slug) or,
+    in older versions, by the SHA-256 of the folder path."""
+    try:
+        reg = json.loads((gh / "projects.json").read_text(encoding="utf8")).get("projects") or {}
+    except (OSError, ValueError, AttributeError):
+        reg = {}
+    folder_of = {slug: path for path, slug in reg.items() if isinstance(slug, str)}
+    for path in list(reg):
+        folder_of[hashlib.sha256(path.encode()).hexdigest()] = path
+    files = [f for f in (gh / "tmp").glob("*/chats/*") if f.suffix in (".json", ".jsonl")]
+    oldest(files)
+    for f in files:
+        cwd = folder_of.get(f.parent.parent.name)
+        try:
+            text = f.read_text(encoding="utf8", errors="ignore")
+        except OSError:
+            continue
+        m = TIMESTAMP.search(text)
+        day = m.group(1) if m else _day(f.stat().st_mtime)
+        # jsonl: one record per line, each with its own timestamp; json: one object
+        for chunk in (text.splitlines() if f.suffix == ".jsonl" else [text]):
+            if "activate_skill" not in chunk and "references" not in chunk:
+                continue
+            t = TIMESTAMP.search(chunk)
+            d = t.group(1) if t else day
+            for s in GEMINI_CALL.findall(chunk):
+                add(s, d, cwd, "gemini")
+            for s in set(ROUTER_READ.findall(chunk)):
+                add(s, d, cwd, "gemini", "router")
 
 
 def summarize(rows: list[tuple]) -> dict:
@@ -147,12 +189,12 @@ def summarize(rows: list[tuple]) -> dict:
             "days": dict(sorted(by_day.items()))}
 
 
-def collect(names: set[str], home: Path | None = None) -> dict[str, dict]:
+def collect(names: set[str], home: Path | None = None, gemini_home: Path | None = None) -> dict[str, dict]:
     """names: skill folder names and skill names to count. Returns
     {name: {"uses", "last": "YYYY-MM-DD", "where": top 3 [folder, count],
     "folders": all [folder, count, last day], "agents": {agent: n}, "router": n,
     "days": {day: n}}} plus "_since": the earliest day the logs cover."""
-    rows, since = events(names, home)
+    rows, since = events(names, home, gemini_home)
     by: dict[str, list[tuple]] = collections.defaultdict(list)
     for r in rows:
         by[r[0]].append(r)

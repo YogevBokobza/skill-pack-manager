@@ -20,7 +20,9 @@ GLOBAL_SKILL_DIRS = {
     "claude": HOME / ".claude" / "skills",
     "opencode": HOME / ".config" / "opencode" / "skills",
     "codex": HOME / ".codex" / "skills",
+    "gemini": HOME / ".gemini" / "skills",
 }
+# Gemini CLI reads .agents/skills too, so it needs no folder of its own.
 PROJECT_SKILL_DIRS = (".claude/skills", ".opencode/skills", ".agents/skills")
 
 

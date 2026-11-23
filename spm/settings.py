@@ -24,6 +24,9 @@ class Settings:
             s["mode"] = None  # first run: the UI asks
         if not isinstance(s.get("scan_roots"), list):
             s["scan_roots"] = None  # None = platform defaults
+        agents = s.get("agents") if isinstance(s.get("agents"), dict) else {}
+        # None: decide by whether the agent is installed (its home folder exists)
+        s["agents"] = {"gemini": agents.get("gemini") if isinstance(agents.get("gemini"), bool) else None}
         if not isinstance(s.get("auto_update_check"), bool):
             s["auto_update_check"] = True  # standalone: check skill updates once a day when the app opens
         return s
@@ -38,6 +41,12 @@ class Settings:
             if body["mode"] not in MODES:
                 raise ValueError(f"mode must be one of {', '.join(MODES)}")
             s["mode"] = body["mode"]
+        if "agents" in body:
+            a = body["agents"] if isinstance(body["agents"], dict) else {}
+            if "gemini" in a:
+                if a["gemini"] is not None and not isinstance(a["gemini"], bool):
+                    raise ValueError("agents.gemini must be true, false or null")
+                s["agents"]["gemini"] = a["gemini"]
         if "auto_update_check" in body:
             if not isinstance(body["auto_update_check"], bool):
                 raise ValueError("auto_update_check must be true or false")

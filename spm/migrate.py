@@ -34,8 +34,9 @@ from .sources import CcSwitchSource, LocalSource, SourceError, ccswitch_source
 CCSWITCH_PROCESSES = ("cc-switch", "cc-switch.exe", "CC Switch")
 
 
-def _ccswitch_rows(db: Path) -> tuple[dict, list[str]]:
-    """skill dir -> {source, enabled: [clients]}; plus other agent columns in use."""
+def _ccswitch_rows(db: Path, managed=CLIENTS) -> tuple[dict, list[str]]:
+    """skill dir -> {source, enabled: [clients]}; plus other agent columns in use
+    (agents this program does not manage, such as Gemini when it is off)."""
     rows, others = {}, set()
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
@@ -43,8 +44,8 @@ def _ccswitch_rows(db: Path) -> tuple[dict, list[str]]:
         for r in (con.execute("select * from skills").fetchall() if cols else []):
             d = dict(zip(cols, r))
             src = ccswitch_source(d)
-            enabled = [c for c in CLIENTS if d.get(f"enabled_{c}")]
-            others |= {k[8:] for k, v in d.items() if k.startswith("enabled_") and v and k[8:] not in CLIENTS}
+            enabled = [c for c in managed if d.get(f"enabled_{c}")]
+            others |= {k[8:] for k, v in d.items() if k.startswith("enabled_") and v and k[8:] not in managed}
             rows[d["directory"]] = {"source": src, "enabled": enabled}
     finally:
         con.close()
@@ -54,7 +55,7 @@ def _ccswitch_rows(db: Path) -> tuple[dict, list[str]]:
 def plan(cc: CcSwitchSource, local: LocalSource, packs_data: dict, replace: bool = False) -> dict:
     if not cc.db.exists():
         raise SourceError("cc-switch was not found on this computer")
-    rows, others = _ccswitch_rows(cc.db)
+    rows, others = _ccswitch_rows(cc.db, tuple(local.global_dirs))
     meta = local._load()
     p = {"skills_copy": [], "skills_replace": [], "skills_skip": [], "skills_done": [],
          "mcp_copy": [], "mcp_skip": [], "mcp_invalid": [], "relink": [], "global": [],
@@ -119,7 +120,7 @@ def apply(p: dict, cc: CcSwitchSource, local: LocalSource, data_dir: Path,
           relink: bool = True, take_over_global: bool = True) -> dict:
     if process_running(CCSWITCH_PROCESSES):
         raise SourceError("cc-switch is running. Quit it first, then migrate.")
-    rows, _ = _ccswitch_rows(cc.db)
+    rows, _ = _ccswitch_rows(cc.db, tuple(local.global_dirs))
     log, errors = [], []
     backup = data_dir / "migration-backup" / time.strftime("%Y%m%d-%H%M%S")
     c = local._load()
