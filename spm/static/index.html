@@ -544,7 +544,7 @@ function renderPacks() {
     ...items.map(p => h("div", { class: "item" + (S.pack === p.name ? " sel" : ""), role: "button", tabindex: "0", "aria-label": p.name, onclick: () => { S.pack = p.name; render(); }, onkeydown: e => { if (e.key === "Enter") { S.pack = p.name; render(); } } },
       h("div", { class: "t" }, p.name, p.mcp.length ? h("span", { class: "badge" }, "MCP") : null,
         p.includes.length ? h("span", { class: "badge", title: `includes ${p.includes.join(", ")}` }, `+${p.includes.length}`) : null),
-      h("div", { class: "p" }, `${plural(p.skills.length, "skill")}${p.mcp.length ? ` · ${p.mcp.length} MCP` : ""} · ${plural(p.paths.length, "folder")}`))));
+      h("div", { class: "p" }, `${plural(p.skills.length, "skill")}${p.mcp.length ? ` · ${p.mcp.length} MCP` : ""} · ${plural(p.paths.length, "folder")}${p.derived_paths.length ? ` (+${p.derived_paths.length} via other packs)` : ""}`))));
   const d = $("detail"), p = S.state.packs.find(x => x.name === S.pack);
   if (!p) return fill(d, h("h2", {}, "Packs"), h("p", { class: "muted" }, "A pack is a named set of skills (and MCP servers) that you attach to project folders. Pick a pack on the left, or create one."));
   const desc = Object.fromEntries(S.state.skills.map(s => [s.dir, s.description]));
@@ -554,12 +554,18 @@ function renderPacks() {
       h("button", { class: "btn danger", onclick: () => op("delete_pack", { pack: p.name }, `Delete pack ${p.name}`).then(() => { if (!S.state.packs.some(x => x.name === p.name)) { S.pack = null; render(); } }) }, "Delete pack")),
     routerSection(p),
     includesSection(p),
-    h("h3", {}, `Folders (${p.paths.length})`),
+    h("h3", {}, `Folders (${p.paths.length}${p.derived_paths.length ? ` + ${p.derived_paths.length} through other packs` : ""})`),
     ...p.paths.map(f => h("div", { class: "row", style: "margin-bottom:6px" },
       h("span", { style: "flex:1; word-break:break-all" }, f),
       h("button", { class: "btn", onclick: () => { S.tab = "folders"; selectFolder(f); } }, "View"),
       h("button", { class: "btn danger", onclick: () => op("detach", { pack: p.name, folder: f }, `Detach ${p.name}`) }, "Detach"))),
-    p.paths.length ? null : h("p", { class: "muted" }, "Not attached to any folder."),
+    ...p.derived_paths.map(d => h("div", { class: "row", style: "margin-bottom:6px" },
+      h("span", { style: "flex:1; word-break:break-all" }, d.folder, " ",
+        ...d.via.map(v => h("span", { class: "badge b-info", title: `${v} is attached here and includes ${p.name}` }, `via ${v}`))),
+      h("button", { class: "btn", onclick: () => { S.tab = "folders"; selectFolder(d.folder); } }, "View"),
+      ...d.via.map(v => h("button", { class: "btn", title: `To remove ${p.name} from this folder, detach ${v} here or stop ${v} from including ${p.name}`,
+        onclick: () => { S.pack = v; render(); } }, `Open ${v}`)))),
+    p.paths.length || p.derived_paths.length ? null : h("p", { class: "muted" }, "Not attached to any folder."),
     h("button", { class: "btn", style: "margin-top:6px", onclick: () => guard(async () => {
       const r = await api("/api/pick-folder", { start: "D:\\Projects" });
       if (r.folder) op("attach", { pack: p.name, folder: r.folder }, `Attach ${p.name}`);
@@ -578,7 +584,11 @@ function renderPacks() {
 
 // Sharing ---------------------------------------------------------------
 function includesSection(p) {
-  const others = S.state.packs.map(x => x.name).filter(n => n !== p.name && !p.includes.includes(n));
+  // leave out packs that already include this one, directly or through others: including them would be a cycle
+  const inc = Object.fromEntries(S.state.packs.map(x => [x.name, x.includes]));
+  const reaches = (from, target, seen = new Set()) => from === target ||
+    (!seen.has(from) && (seen.add(from), (inc[from] || []).some(n => reaches(n, target, seen))));
+  const others = S.state.packs.map(x => x.name).filter(n => n !== p.name && !p.includes.includes(n) && !reaches(n, p.name));
   const sel = h("select", {}, ...others.map(n => h("option", { value: n }, n)));
   return h("div", {},
     h("h3", {}, `Includes (${p.includes.length})`),

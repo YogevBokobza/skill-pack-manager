@@ -864,6 +864,7 @@ class Model:
         packs = [{"name": n, "skills": p["skills"], "mcp": p.get("mcp", []), "paths": p["paths"],
                   "includes": packset.includes(data, n),
                   "included_by": [x for x in data["packs"] if n in packset.includes(data, x)],
+                  "derived_paths": packset.derived_folders(data, n),
                   "router": self.router_info(data, n)}
                  for n, p in data["packs"].items()]
         in_packs: dict[str, list[str]] = {}
