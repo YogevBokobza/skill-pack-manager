@@ -272,6 +272,8 @@ class Cli:
                     self.p(f"  mcp:    {', '.join(p['mcp'])}")
                 for f in p["paths"]:
                     self.p(f"  folder: {f}")
+                for d in p.get("derived_paths") or []:
+                    self.p(f"  folder: {d['folder']} (via {', '.join(d['via'])})")
         return self.emit(st["packs"], text)
 
     def c_skills(self):

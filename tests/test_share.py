@@ -42,6 +42,25 @@ class Includes(McpEnv):
             self.m.run("delete_pack", {"pack": "two"}, dry=True)
         self.assertEqual(packset.expand(self.m.load(), ["one"]), ["one", "two", "web"])
 
+    def test_included_pack_lists_the_folders_it_reaches(self):
+        self.m.run("pack_include", {"pack": "one", "include": "two"}, dry=False)
+        self.m.run("pack_include", {"pack": "two", "include": "web"}, dry=False)
+        self.m.run("attach", {"pack": "one", "folder": str(self.proj)}, dry=False)
+        self.m.run("attach", {"pack": "two", "folder": str(self.other)}, dry=False)
+        packs = {p["name"]: p for p in self.m.state()["packs"]}
+        self.assertEqual(packs["one"]["derived_paths"], [])
+        self.assertEqual(packs["two"]["derived_paths"], [{"folder": str(self.proj), "via": ["one"]}])
+        web = sorted(packs["web"]["derived_paths"], key=lambda d: d["folder"])
+        self.assertEqual(web, sorted([{"folder": str(self.proj), "via": ["one"]},
+                                      {"folder": str(self.other), "via": ["two"]}], key=lambda d: d["folder"]))
+        # attached directly as well: listed once, under the pack's own folders
+        self.m.run("attach", {"pack": "two", "folder": str(self.proj)}, dry=False)
+        packs = {p["name"]: p for p in self.m.state()["packs"]}
+        self.assertEqual(packs["two"]["derived_paths"], [])
+        out = io.StringIO()
+        cli.run(["packs"], app=mock.Mock(model=self.m), out=out)
+        self.assertIn(f"folder: {self.other} (via two)", out.getvalue())
+
     def test_hand_edited_cycle_does_not_loop(self):
         data = self.m.load()
         data["packs"]["one"]["includes"] = ["two"]

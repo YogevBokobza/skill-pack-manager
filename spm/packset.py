@@ -57,5 +57,22 @@ def folders_using(data: dict, pack: str) -> list[str]:
     return list(seen.values())
 
 
+def derived_folders(data: dict, pack: str) -> list[dict]:
+    """Folders that get pack only because another attached pack includes it:
+    [{"folder": path, "via": [attached packs that bring it]}]. Folders where
+    pack is attached directly are not listed."""
+    own = {_norm(x) for x in data["packs"].get(pack, {}).get("paths", [])}
+    out: dict[str, dict] = {}
+    for n in including(data, pack):
+        if n == pack:
+            continue
+        for path in data["packs"][n].get("paths", []):
+            key = _norm(path)
+            if key in own:
+                continue
+            out.setdefault(key, {"folder": path, "via": []})["via"].append(n)
+    return sorted(out.values(), key=lambda d: d["folder"].lower())
+
+
 def would_cycle(data: dict, pack: str, include: str) -> bool:
     return pack == include or pack in expand(data, [include])
