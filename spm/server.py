@@ -115,6 +115,11 @@ class App:
             return self.model.folder_view(self.model.load(), q["path"][0])
         if path == "/api/scan":
             return {"projects": self.model.scan()}
+        if path == "/api/insights":
+            days = int((q.get("days") or ["60"])[0])
+            if not 1 <= days <= 3650:
+                raise OpError("days must be between 1 and 3650")
+            return self.model.insights(days)
         if path == "/api/mcp/detail":
             name = q["name"][0]
             cat = self.model.mcp_catalog()

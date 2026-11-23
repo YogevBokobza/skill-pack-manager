@@ -58,10 +58,21 @@ in which folder and for which agent. Nothing happens until you press Apply.
   plain). Secret values are stored locally and never shown again in the UI.
 - **Global switches** (standalone mode). Turn a skill or MCP server on for every
   project of one agent, per agent.
-- **Find projects.** Scans your project folders for Unity and Unreal projects
-  and for folders that already hold linked skills but have no pack.
-- **Usage counts.** Reads past Claude Code, OpenCode and Codex sessions to show
-  how often each skill was used and where.
+- **Find projects.** Scans your project folders for git repositories, Unity,
+  Unreal and Godot projects, and folders that already hold linked skills but
+  have no pack. Each project's stack (node, react, python, fastapi, rust, ...)
+  comes from its marker files, and the app suggests the pack named after that
+  stack, or the one used by your projects like it.
+- **Usage tab.** Reads past Claude Code, OpenCode and Codex sessions on this
+  computer: uses per skill, per agent and per folder, uses per week, and skills
+  never used. Skills read through a pack router count too.
+- **Context cost.** For every folder and agent, an estimate of the tokens the
+  skill listings take in every session (global skills included), and what the
+  pack routers save or could save. The Skills tab shows the estimate per skill.
+- **Cleanup suggestions.** A global skill nobody used lately, a global skill
+  used in one project only, a pack skill or extra skill unused where it is
+  attached, a big pack without a router. Each suggestion opens the usual
+  preview.
 - **Light, dark or system theme.**
 
 ## Screenshots
@@ -166,8 +177,33 @@ MCP servers. You can run the migration again later to pick up anything new.
    on globally per agent in **Skills** or **MCP servers**.
 6. **Find what you missed.** **Find projects** lists projects without a pack.
    Set the folders it scans in **Settings**.
-7. **Keep it current.** **Check for updates** in **Skills**, and **Version…** on
+7. **Trim what nobody uses.** In **Usage**, click **Count usage**, then go
+   through the suggestions. Pick how far back "not used" looks (30 to 180
+   days). The context cost table shows what each folder costs per session.
+8. **Keep it current.** **Check for updates** in **Skills**, and **Version…** on
    a skill to move to another branch or tag.
+
+### Usage and context cost
+
+**Count usage** reads the session logs the agents keep on this computer. It
+counts Skill tool calls and slash commands (Claude Code), the skill tool
+(OpenCode), `SKILL.md` reads (Codex), and reads of
+`using-<pack>/references/<name>/<name>.md`, which is how agents open a skill
+behind a router. Nothing is sent anywhere. Claude Code deletes old session logs
+after 30 days by default, so the tab shows how far back the logs go, and "not
+used" never claims more than that.
+
+The context cost is an estimate: about four characters per token of each listed
+skill's name and description, from the skills folders each agent reads:
+
+| Agent | In a project | Global |
+|---|---|---|
+| Claude Code | `.claude/skills` | `~/.claude/skills` |
+| OpenCode | `.opencode/skills`, `.claude/skills`, `.agents/skills` | `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` |
+| Codex | `.agents/skills` | `~/.codex/skills`, `~/.agents/skills` |
+
+A skill with `disable-model-invocation: true` is not listed, so it costs
+nothing. Built-in skills and skills from plugins are not counted.
 
 ### Pack routers
 
@@ -340,7 +376,7 @@ All optional environment variables:
 ## Development
 
 ```sh
-python -m unittest -v           # 83 tests, Windows, macOS and Linux
+python -m unittest -v           # all tests, Windows, macOS and Linux
 python -m spm --no-window       # serve only, print the URL
 python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 ```

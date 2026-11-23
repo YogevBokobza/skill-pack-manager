@@ -46,6 +46,7 @@ for the `claude` CLI so nothing is written to your real `~/.claude.json`.
 | `spm/router.py` | pack routers: template, AI writers (Claude/Codex CLI, Anthropic/OpenAI API), rendering, storage |
 | `spm/migrate.py` | migration from cc-switch: skills, MCP servers, project links, global skills |
 | `spm/usage.py` | counts skill use in past Claude Code, OpenCode and Codex sessions |
+| `spm/insights.py` | context cost estimates, cleanup suggestions, project stack tags and pack suggestions (read-only) |
 | `spm/server.py` | local HTTP API (token + Host check) |
 | `spm/static/index.html` | the whole UI, plain JavaScript, no build step |
 | `spm/__main__.py` | launcher: server + app window |
