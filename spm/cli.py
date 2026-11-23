@@ -14,6 +14,8 @@ and agents.
   spm suggest [--days N]         cleanup suggestions
   spm scan                       projects under the scan roots, with pack suggestions
   spm check-updates              standalone mode: newer commits or tags
+  spm update SKILL [--ref REF]   standalone: show what changes, then install
+  spm rollback SKILL [VERSION]   standalone: list earlier versions, or restore one
 
 Commands that change something print the plan first. In a terminal they ask
 before applying; elsewhere (scripts, agents) they need --yes. --dry-run only
@@ -32,7 +34,7 @@ from .mcp import McpError
 from .sources import SourceError
 
 COMMANDS = ("status", "sync", "attach", "detach", "extra", "pack", "packs", "skills", "tokens", "usage", "suggest",
-            "scan", "check-updates")
+            "scan", "check-updates", "update", "rollback")
 LABEL = {"claude": "Claude Code", "opencode": "OpenCode", "codex": "Codex"}
 
 
@@ -79,6 +81,13 @@ def parser() -> argparse.ArgumentParser:
     cmd("suggest", "cleanup suggestions").add_argument("--days", type=int, default=60)
     cmd("scan", "projects under the scan roots")
     cmd("check-updates", "newer commits or tags for installed skills (standalone)")
+    p = cmd("update", "review and install another version of a skill (standalone)", change=True)
+    p.add_argument("skill")
+    p.add_argument("--ref", help="branch or tag (default: the installed one, newest commit)")
+    p.add_argument("--diff", action="store_true", help="print the full diff")
+    p = cmd("rollback", "restore an earlier version of a skill (standalone)", change=True)
+    p.add_argument("skill")
+    p.add_argument("version", nargs="?", help="a version id from the list; without it, list them")
     return ap
 
 
@@ -330,6 +339,75 @@ class Cli:
             if not any(v.get("branch_moved") or v.get("newer_tags") or v.get("error") for v in u.values()):
                 self.p("all skills are up to date")
         return self.emit(u, text)
+
+
+    def confirm(self) -> int | None:
+        """None to go on; an exit code to stop with."""
+        if self.a.dry_run:
+            return 0
+        if self.a.yes:
+            return None
+        if not self.stdin.isatty():
+            print("not applied: add --yes to apply", file=sys.stderr)
+            return 2
+        print("Apply? [y/N] ", end="", file=self.out, flush=True)
+        if self.stdin.readline().strip().lower() not in ("y", "yes"):
+            self.p("not applied")
+            return 2
+        return None
+
+    def c_update(self):
+        src, ws = self.app.local(), self.app.ws
+        r = src.update_preview(ws, self.a.skill, self.a.ref)
+        try:
+            if self.a.json:
+                self.p(json.dumps(r, indent=2, ensure_ascii=False))
+            elif r["up_to_date"]:
+                self.p(f"{self.a.skill} is up to date ({r['to']['ref']} {r['to']['commit'][:7]})")
+            else:
+                f, t = r["from"], r["to"]
+                self.p(f"{self.a.skill}: {f['ref']} {(f['commit'] or '')[:7]} -> {t['ref']} {t['commit'][:7]}")
+                for x in r["files"]:
+                    size = "binary" if x["binary"] else f"+{x['lines'][0]} -{x['lines'][1]}"
+                    self.p(f"  {x['status']:<8} {x['path']}  ({size})")
+                    if self.a.diff and x["diff"]:
+                        for line in x["diff"].splitlines():
+                            self.p("      " + line)
+                flagged = [x for x in r["new_findings"] if x["level"] != "info"]
+                self.p(f"  new in this version: {len(flagged)} flagged line(s)" if flagged
+                       else "  the check found nothing new (a pattern check, not a guarantee)")
+                for x in flagged:
+                    self.p(f"    [{x['level']}] {x['rule']}: {x['file']}:{x['line']}  {x['text'][:120]}")
+            if r["up_to_date"]:
+                return 0
+            stop = self.confirm()
+            if stop is not None:
+                return stop
+            self.p(src.update(ws, self.a.skill, cid=r["id"]))
+            r["id"] = None  # used up
+            return 0
+        finally:
+            if r.get("id"):
+                ws.drop(r["id"])
+
+    def c_rollback(self):
+        src = self.app.local()
+        versions = src.history(self.a.skill)
+        if not self.a.version:
+            def text():
+                if not versions:
+                    self.p(f"no earlier versions of {self.a.skill} are kept")
+                for v in versions:
+                    self.p(f"{v['id']}  {v['ref'] or v['local'] or '?'} {(v['commit'] or '')[:7]}")
+            return self.emit(versions, text)
+        if not any(v["id"] == self.a.version for v in versions):
+            raise CliError(f"no version {self.a.version!r}; run: spm rollback {self.a.skill}")
+        self.p(f"restore {self.a.skill} to {self.a.version} (the current version is kept and can be restored)")
+        stop = self.confirm()
+        if stop is not None:
+            return stop
+        self.p(src.rollback(self.a.skill, self.a.version))
+        return 0
 
 
 STATUS = {"ok": "linked", "missing": "not linked yet", "partial": "partly linked", "conflict": "name conflict",

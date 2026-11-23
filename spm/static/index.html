@@ -106,6 +106,10 @@ pre.preview { background: var(--panel2); padding: 10px; border-radius: 6px; max-
 .bars .bar span { font-size: 11px; color: var(--muted); }
 .bars .bar i { display: block; width: 100%; min-height: 2px; background: var(--accent); border-radius: 3px 3px 0 0; }
 .costline { font-size: 12px; color: var(--muted); margin-top: 4px; }
+pre.diff { background: var(--panel2); padding: 8px 10px; border-radius: 6px; max-height: 360px; overflow: auto; font-size: 12px; margin: 6px 0 10px; white-space: pre; }
+pre.diff .add { color: var(--ok); } pre.diff .del { color: var(--bad); } pre.diff .hunk { color: var(--info); }
+.finding { font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.finding code { display: block; white-space: pre-wrap; word-break: break-all; background: var(--panel2); padding: 3px 6px; border-radius: 4px; margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -285,6 +289,7 @@ async function refresh() {
   else S.insights = null;  // costs change with every operation; fetched again on the tab
   render();
   if (!S.state.settings.mode && !S.firstRunShown) { S.firstRunShown = true; firstRun(); }
+  maybeCheckUpdates();
 }
 
 // ------------------------------------------------------------------ views
@@ -643,8 +648,10 @@ function sourceCell(s) {
   if (src.local) return h("span", { class: "muted", title: src.local }, "local folder");
   const upd = (S.updates || {})[s.dir];
   const kind = src.kind === "tag" ? "tag" : src.kind === "branch" ? "branch" : null;
+  const link = linkTo(src.url, shortUrl(src.url));
+  link.style.cssText = "display:inline-block; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom";
   return h("div", {},
-    linkTo(src.url, shortUrl(src.url)),
+    link,
     h("div", { class: "row", style: "gap:5px; margin-top:3px" },
       h("code", { class: "ver", title: kind ? `${kind} ${src.ref}` : src.ref }, src.ref || "?"),
       kind ? h("span", { class: "badge" + (kind === "tag" ? " b-info" : "") }, kind) : null,
@@ -952,6 +959,27 @@ async function installFromRepo() {
   await chooseSkills(S.inspect);
 }
 
+// Heuristic scan results (spm/scan.py): a summary line and the flagged lines
+const LEVEL = { high: ["b-bad", "needs a look"], medium: ["b-warn", "worth a look"], info: ["muted", "note"] };
+function scanBadges(sc) {
+  if (!sc) return null;
+  if (!sc.high && !sc.medium) return h("span", { class: "badge b-ok", title: "No risky patterns found. This is a pattern check, not a guarantee." }, sc.scripts.length ? `${plural(sc.scripts.length, "script")}, nothing flagged` : "nothing flagged");
+  return h("span", { class: "row", style: "gap:4px" },
+    sc.high ? h("span", { class: "badge b-bad" }, `${sc.high} high`) : null,
+    sc.medium ? h("span", { class: "badge b-warn" }, `${sc.medium} medium`) : null);
+}
+function findingList(findings, open) {
+  const shown = findings.filter(f => f.level !== "info");
+  const notes = findings.filter(f => f.level === "info");
+  if (!findings.length) return null;
+  return h("details", { open: open || null },
+    h("summary", { style: "cursor:pointer" }, shown.length ? `${plural(shown.length, "flagged line")}` : "notes", notes.length ? h("span", { class: "muted" }, ` (+${notes.length} network notes)`) : null),
+    ...[...shown, ...notes].slice(0, 60).map(f => h("div", { class: "finding" },
+      h("span", { class: "badge " + LEVEL[f.level][0] }, f.level), " ", h("b", {}, f.rule), " ", h("span", { class: "muted" }, `${f.why}. ${f.file}${f.line ? `:${f.line}` : ""}`),
+      f.text ? h("code", {}, f.text) : null)));
+}
+const SCAN_NOTE = "These checks flag patterns such as piping a download into a shell, reading credentials or hidden text. They do not prove a skill safe or unsafe; read what they point at.";
+
 async function chooseSkills(c) {
   if (!c.skills.length) { await api("/api/repo/cancel", { id: c.id }); return toast("No SKILL.md found in that version", true); }
   const checks = [];
@@ -960,15 +988,19 @@ async function chooseSkills(c) {
     checks.push([cb, s]);
     return h("div", { class: "skillpick" },
       h("label", { class: "row" }, cb, h("b", {}, s.dir), h("span", { class: "muted" }, s.path),
-        s.in_store ? h("span", { class: "badge " + (s.same_source ? "b-info" : "b-warn") }, s.same_source ? "installed, will update" : "name taken in store") : null),
+        s.in_store ? h("span", { class: "badge " + (s.same_source ? "b-info" : "b-warn") }, s.same_source ? "installed, will update" : "name taken in store") : null,
+        scanBadges(s.scan)),
       h("div", { class: "muted", style: "font-size:12px; margin:2px 0 4px 24px" }, s.description),
+      s.scan ? h("div", { style: "margin-left:24px" }, findingList(s.scan.findings, s.scan.high > 0)) : null,
       h("details", { style: "margin-left:24px" }, h("summary", {}, "Show SKILL.md"), h("pre", { class: "preview" }, s.preview)));
   }));
   const replace = h("input", { type: "checkbox" });
   const done = await openModal(`Install from ${shortUrl(c.url)} @ ${c.ref}`, [
-    h("p", { class: "muted" }, `Commit ${c.commit.slice(0, 12)}. ${plural(c.skills.length, "skill")} found.`), list,
+    h("p", { class: "muted" }, `Commit ${c.commit.slice(0, 12)}. ${plural(c.skills.length, "skill")} found. `, SCAN_NOTE), list,
     h("label", { class: "row", style: "margin-top:10px" }, replace, "Replace skills with the same name from another source"),
   ], [{ label: "Cancel", value: false }, { label: "Install", primary: true, busy: "Installing…", run: async () => {
+    const risky = checks.filter(([cb, s]) => cb.checked && s.scan && s.scan.high).map(([, s]) => s.dir);
+    if (risky.length && !confirm(`${risky.join(", ")}: the check flagged lines that need a look. Install anyway?`)) return false;
     const paths = checks.filter(([cb]) => cb.checked).map(([, s]) => s.path);
     const r = await api("/api/repo/install", { id: c.id, paths, replace: replace.checked });
     toast(r.log.join("; ")); return true;
@@ -979,23 +1011,70 @@ async function chooseSkills(c) {
 
 async function updateSkill(s) {
   await guard(async () => {
-    const info = await api("/api/repo/refs", { url: s.source.url });
+    const [info, hist] = await Promise.all([api("/api/repo/refs", { url: s.source.url }), api("/api/skill/history", { dir: s.dir })]);
     const [box, picked] = refList(info.refs, s.source.ref);
-    await openModal(`Version of ${s.dir}`, [h("p", { class: "muted" }, `Installed: ${s.source.ref} (${(s.source.commit || "").slice(0, 7)}). Choosing the same branch pulls its newest commit.`), box],
-      [{ label: "Cancel" }, { label: "Install this version", primary: true, busy: "Updating…", run: async () => {
-        const r = await api("/api/skill/update", { dir: s.dir, ref: picked() }); toast(r.log.join("; ")); } }]);
+    const earlier = hist.versions.length ? h("div", {}, h("h3", {}, "Earlier versions on this computer"),
+      ...hist.versions.map(v => h("div", { class: "row", style: "margin-bottom:6px" },
+        h("code", { class: "ver" }, v.ref || (v.local ? "local folder" : "?")), v.commit ? h("span", { class: "muted", style: "font-size:11px" }, v.commit.slice(0, 7)) : null,
+        h("span", { class: "muted", style: "font-size:12px; flex:1" }, `replaced ${new Date(v.saved_at * 1000).toLocaleString()}`),
+        h("button", { class: "btn", onclick: () => guard(async () => {
+          const r = await api("/api/skill/rollback", { dir: s.dir, id: v.id }); toast(r.log.join("; "));
+          $("mfoot").firstChild.click();  // Cancel: closes the dialog and ends this flow
+          await refresh();
+        }) }, "Restore")))) : null;
+    const pre = await openModal(`Version of ${s.dir}`, [
+      h("p", { class: "muted" }, `Installed: ${s.source.ref} (${(s.source.commit || "").slice(0, 7)}). Choosing the same branch pulls its newest commit. Next you see what changes before anything is installed.`),
+      box, earlier,
+      h("p", { class: "muted", style: "font-size:12px" }, "The app keeps the last 3 versions it replaced, so you can go back."),
+    ], [{ label: "Cancel" }, { label: "Review changes", primary: true, busy: "Downloading…", run: async () =>
+      (S.review = await api("/api/skill/update-preview", { dir: s.dir, ref: picked() })) }], true);
+    if (!pre || !S.review) return;
+    await reviewUpdate(S.review);
+    S.review = null;
     await refresh();
   });
 }
 
-async function checkUpdates() {
+function diffBlock(text) {
+  return h("pre", { class: "diff" }, ...text.split("\n").map(l => h("span", {
+    class: l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : "" }, l + "\n")));
+}
+async function reviewUpdate(r) {
+  if (r.up_to_date) { await api("/api/repo/cancel", { id: r.id }).catch(() => {}); return toast(`${r.dir} is already at ${r.to.ref} (${r.to.commit.slice(0, 7)})`); }
+  const STAT = { added: "b-ok", removed: "b-bad", changed: "b-info" };
+  const newHigh = r.new_findings.filter(f => f.level === "high").length;
+  const ok = await openModal(`Update ${r.dir}: ${r.from.ref} ${(r.from.commit || "").slice(0, 7)} → ${r.to.ref} ${r.to.commit.slice(0, 7)}`, [
+    r.new_findings.filter(f => f.level !== "info").length
+      ? h("div", { class: "card", style: `border-color:var(${newHigh ? "--bad" : "--warn"}); margin-bottom:12px` },
+          h("b", { class: newHigh ? "b-bad" : "b-warn" }, "New in this version"), h("p", { class: "muted", style: "font-size:12px; margin:4px 0" }, SCAN_NOTE),
+          findingList(r.new_findings, true))
+      : h("p", { class: "b-ok" }, "The check found nothing new in this version. ", h("span", { class: "muted" }, "(A pattern check, not a guarantee.)")),
+    h("h3", {}, `${plural(r.files.length, "file")} changed`),
+    ...r.files.map(f => h("details", { open: f.path === "SKILL.md" || null },
+      h("summary", { style: "cursor:pointer" }, h("span", { class: "badge " + STAT[f.status] }, f.status), " ", h("b", {}, f.path), " ",
+        f.binary ? h("span", { class: "muted" }, "binary or large file") : h("span", { class: "muted" }, `+${f.lines[0]} −${f.lines[1]}`)),
+      f.diff ? diffBlock(f.diff) : null)),
+  ], [{ label: "Cancel", value: false }, { label: newHigh ? "Install anyway" : "Install this version", primary: !newHigh, danger: !!newHigh, busy: "Installing…", run: async () => {
+    const res = await api("/api/skill/update", { dir: r.dir, id: r.id }); toast(res.log.join("; ")); return true; } }], true);
+  if (!ok) await api("/api/repo/cancel", { id: r.id }).catch(() => {});
+}
+
+async function checkUpdates(silent) {
   await guard(async () => {
-    toast("Checking the repositories…");
+    if (!silent) toast("Checking the repositories…");
     S.updates = (await api("/api/skill/updates", {})).updates;
     const n = Object.values(S.updates).filter(u => u.branch_moved || (u.newer_tags || []).length).length;
-    toast(n ? `${plural(n, "skill")} can be updated` : "All skills are up to date");
+    if (!silent || n) toast(n ? `${plural(n, "skill")} can be updated (Skills tab)` : "All skills are up to date");
     render();
   });
+}
+// standalone: once a day when the app opens, unless switched off in Settings
+function maybeCheckUpdates() {
+  const st = S.state, last = (st.updates || {}).at || 0;
+  if (!S.updates && st.updates && st.updates.updates) S.updates = st.updates.updates;
+  if (S.autoChecked || st.mode !== "standalone" || !st.settings.auto_update_check || !st.skills.some(s => s.source && s.source.url)) return;
+  S.autoChecked = true;
+  if (Date.now() / 1000 - last > 86400) checkUpdates(true);
 }
 
 async function importSkillFolder() {
@@ -1145,6 +1224,11 @@ function renderSettings() {
     roots,
     h("div", { class: "row" }, h("button", { class: "btn", onclick: () => guard(async () => { const r = await api("/api/pick-folder", {}); if (r.folder) saveRoots([...set.scan_roots, r.folder]); }) }, "Choose folder…"),
       addRoot, h("button", { class: "btn", onclick: () => addRoot.value.trim() && saveRoots([...set.scan_roots, addRoot.value.trim()]) }, "Add")),
+    st.mode === "standalone" ? h("div", {}, h("h3", {}, "Skill updates"),
+      h("label", { class: "row" }, h("input", { type: "checkbox", checked: set.auto_update_check,
+        onchange: e => guard(async () => { await api("/api/settings", { auto_update_check: e.target.checked }); await refresh(); }) }),
+        "Check for updates once a day when the app opens"),
+      h("p", { class: "muted", style: "font-size:12px" }, "It only looks: an update is installed after you review its changes.")) : null,
     aiSettings(set.ai),
     h("h3", {}, "Files"),
     h("table", {}, h("tbody", {},

@@ -24,6 +24,8 @@ class Settings:
             s["mode"] = None  # first run: the UI asks
         if not isinstance(s.get("scan_roots"), list):
             s["scan_roots"] = None  # None = platform defaults
+        if not isinstance(s.get("auto_update_check"), bool):
+            s["auto_update_check"] = True  # standalone: check skill updates once a day when the app opens
         return s
 
     def update(self, body: dict) -> dict:
@@ -36,6 +38,10 @@ class Settings:
             if body["mode"] not in MODES:
                 raise ValueError(f"mode must be one of {', '.join(MODES)}")
             s["mode"] = body["mode"]
+        if "auto_update_check" in body:
+            if not isinstance(body["auto_update_check"], bool):
+                raise ValueError("auto_update_check must be true or false")
+            s["auto_update_check"] = body["auto_update_check"]
         if "ai" in body:
             from .router import WRITERS
             ai = body["ai"] if isinstance(body["ai"], dict) else {}

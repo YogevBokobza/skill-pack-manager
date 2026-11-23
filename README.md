@@ -51,8 +51,21 @@ in which folder and for which agent. Nothing happens until you press Apply.
 - **Bulk add and remove.** Tick skills in the Skills tab (or select all that the
   search shows; Shift+click for a range) and add them to a pack or remove them
   from one, with a single preview.
-- **Updates.** One button checks every installed skill against its repository:
-  new commits on its branch, or newer release tags.
+- **Updates you review first.** One button checks every installed skill against
+  its repository: new commits on its branch, or newer release tags. The app
+  also checks once a day when it opens (Settings can turn that off). Before an
+  update is installed you see a diff of every file and what the safety check
+  finds that the installed version did not have. The download you reviewed is
+  the one installed.
+- **Rollback.** The app keeps the last 3 versions of a skill that an update,
+  a replace or a rollback overwrote. **Version…** lists them with a
+  **Restore** button.
+- **Safety check.** Installing and updating run a pattern check over every
+  file of a skill: a download piped into a shell, decoded code that runs,
+  reading credentials, uploads, destructive commands, persistence, switching off
+  an agent's permission checks, text that tells the agent to hide things from
+  you, and invisible Unicode. It flags lines for you to read; it cannot prove a
+  skill safe.
 - **MCP catalog** (standalone mode). Add stdio or HTTP/SSE servers with a form,
   or paste the JSON from a server's README (`mcpServers`, OpenCode `mcp`, or
   plain). Secret values are stored locally and never shown again in the UI.
@@ -130,6 +143,9 @@ python -m spm usage --count              # read the session logs, then list skil
 python -m spm suggest --days 90          # cleanup suggestions, each with the command that does it
 python -m spm scan                       # projects without a pack, with a suggested pack
 python -m spm check-updates              # standalone mode
+python -m spm update frontend-design     # changed files, new safety findings, then install
+python -m spm update frontend-design --ref v2.0.0 --diff
+python -m spm rollback frontend-design   # list earlier versions; add an id to restore one
 ```
 
 A command that changes something prints its plan first. In a terminal it asks
@@ -356,7 +372,8 @@ previous version (last 50) in the data folder.
 | macOS | `~/Library/Application Support/skill-pack-manager` |
 | Linux | `$XDG_DATA_HOME/skill-pack-manager` (default `~/.local/share/skill-pack-manager`) |
 
-It holds `settings.json`, the standalone store (`store/skills`, `store/catalog.json`),
+It holds `settings.json`, the standalone store (`store/skills`, `store/catalog.json`,
+earlier skill versions in `store/history`), the last update check (`updates.json`),
 `packs.json` backups, the usage cache and the log (`spm.log`).
 
 ## Safety
@@ -377,7 +394,9 @@ It holds `settings.json`, the standalone store (`store/skills`, `store/catalog.j
 - **Downloads.** Skills are text that goes into your agent's context, so install
   only from sources you trust. Cloning runs no code from the repository: git runs
   with the `ext::` transport disabled, no LFS filters, no symlinks checked out,
-  and no prompts.
+  and no prompts. The safety check (`spm/scan.py`) reads the files as text and
+  never runs or imports them. A flagged line can be harmless, and a skill with
+  no flags can still do harm.
 - **Local only.** The server listens on `127.0.0.1`. Every request needs a token
   created at launch and the exact `Host` header, so web pages in your browser
   cannot call it.
