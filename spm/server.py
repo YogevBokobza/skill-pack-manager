@@ -355,8 +355,30 @@ class App:
             self.usage_job["running"] = False
 
 
+def _pick_folder_macos(start: str | None) -> str | None:
+    """macOS folder dialog via AppleScript. Tk can't run off the main thread on
+    macOS, and Homebrew Python often lacks tkinter, so don't use it there."""
+    import subprocess
+    start = start if start and os.path.isdir(start) else str(Path.home())
+    quoted = start.replace("\\", "\\\\").replace('"', '\\"')
+    script = ('activate\n'
+              f'POSIX path of (choose folder with prompt "Choose a folder" default location (POSIX file "{quoted}"))')
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    except OSError:
+        raise OpError("No folder dialog available (osascript failed); paste the path instead")
+    if r.returncode != 0:
+        if "-128" in r.stderr:  # user cancelled
+            return None
+        raise OpError(f"Folder dialog failed: {r.stderr.strip() or r.returncode}; paste the path instead")
+    p = r.stdout.strip()
+    return os.path.normpath(p) if p else None
+
+
 def pick_folder(start: str | None) -> str | None:
     """Native folder dialog. Tk runs in its own thread per call."""
+    if MACOS:
+        return _pick_folder_macos(start)
     result: dict = {}
 
     def run():
