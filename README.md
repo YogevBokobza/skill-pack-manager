@@ -517,6 +517,8 @@ python tools/make_demo.py /tmp/spm-demo   # a sandbox with made-up projects
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout and the ground rules.
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/yogevbokobza-skill-pack-manager-78n9m9?v=e47d68cef6549a994e0ae3460443f835)](https://m8ven.ai/mcp/yogevbokobza-skill-pack-manager-78n9m9?s=readme)
+
 ## License
 
 [MIT](LICENSE)
